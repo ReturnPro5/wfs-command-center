@@ -54,9 +54,9 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               : location.pathname.startsWith(item.to);
 
             return (
-              <Link
+              <a
                 key={item.to}
-                to={item.to}
+                href={item.to}
                 className={cn(
                   "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                   isActive
@@ -66,7 +66,7 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
               >
                 <item.icon className="h-4 w-4 shrink-0" />
                 {!collapsed && <span>{item.label}</span>}
-              </Link>
+              </a>
             );
           })}
         </nav>
