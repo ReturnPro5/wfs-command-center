@@ -63,7 +63,10 @@ function SkuDetailPage() {
                 title="Weeks of Supply"
                 value={data.inventory.weeksOfSupply > 99 ? "99+" : data.inventory.weeksOfSupply.toFixed(1)}
                 icon={Info}
-                variant={statusVariant(data.status) === "info" ? "default" : statusVariant(data.status)}
+                variant={(() => {
+                  const v = statusVariant(data.status);
+                  return v === "info" ? "default" : v;
+                })()}
               />
             </div>
 
