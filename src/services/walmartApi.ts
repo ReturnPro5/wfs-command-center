@@ -4,7 +4,7 @@
  * All methods return raw API responses; transformation happens in the business logic layer.
  */
 
-import { getWalmartAccessToken } from "./walmartAuth";
+import { getWalmartAccessToken, getWalmartBasicAuth } from "./walmartAuth";
 
 const getBaseUrl = () =>
   process.env.WALMART_API_BASE_URL || "https://marketplace.walmartapis.com";
@@ -15,6 +15,11 @@ const RETRY_BASE_MS = 1000;
 async function walmartFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = await getWalmartAccessToken();
   const baseUrl = getBaseUrl();
+
+  const channelType = process.env.WALMART_CHANNEL_TYPE;
+  if (!channelType) {
+    throw new Error("WALMART_CHANNEL_TYPE must be configured (find it in Seller Center → Developer → API Keys)");
+  }
 
   let lastError: Error | null = null;
 
@@ -30,7 +35,10 @@ async function walmartFetch<T>(path: string, options: RequestInit = {}): Promise
         ...options,
         signal: AbortSignal.timeout(30_000),
         headers: {
+          // Walmart requires BOTH Basic credentials and the access token on every API call
+          "Authorization": getWalmartBasicAuth(),
           "WM_SEC.ACCESS_TOKEN": token,
+          "WM_CONSUMER.CHANNEL.TYPE": channelType,
           "WM_SVC.NAME": "Walmart Marketplace",
           "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
           "WM_MARKET": "walmart.com",
