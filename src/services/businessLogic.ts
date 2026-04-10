@@ -19,15 +19,17 @@ export function computeVelocity(unitsSold30d: number): number {
   return unitsSold30d / 30;
 }
 
-// ─── Weeks of Supply ────────────────────────────────────
+// ─── Weeks / Days of Supply ─────────────────────────────
+// Returns Infinity when the item has stock but no sales velocity
+// (semantically correct: supply never runs out at zero demand).
 export function computeWeeksOfSupply(onHand: number, velocity: number): number {
-  if (velocity <= 0) return onHand > 0 ? 999 : 0;
+  if (velocity <= 0) return onHand > 0 ? Infinity : 0;
   const weeklySales = velocity * 7;
   return onHand / weeklySales;
 }
 
 export function computeDaysOfSupply(onHand: number, velocity: number): number {
-  if (velocity <= 0) return onHand > 0 ? 9999 : 0;
+  if (velocity <= 0) return onHand > 0 ? Infinity : 0;
   return onHand / velocity;
 }
 
@@ -112,31 +114,33 @@ export function generateAlerts(
 ): Alert[] {
   const alerts: Alert[] = [];
   const salesMap = new Map(salesData.map((s) => [s.sku, s]));
+  let seq = 0;
 
   for (const item of inventory) {
     const sales = salesMap.get(item.sku);
 
     if (item.onHand === 0) {
-      alerts.push(makeAlert("stockout", "critical", item, "Stockout — zero units on hand"));
+      alerts.push(makeAlert("stockout", "critical", item, "Stockout — zero units on hand", seq++));
     } else if (item.weeksOfSupply < 1) {
-      alerts.push(makeAlert("low-inventory", "critical", item, `Critical low stock — ${item.daysOfSupply.toFixed(0)} days of supply`));
-      if (item.inbound === 0) {
-        alerts.push(makeAlert("low-inventory", "critical", item, "No inbound shipment for critically low item"));
-      }
+      const noInbound = item.inbound === 0;
+      const msg = noInbound
+        ? `Critical low stock — ${item.daysOfSupply.toFixed(0)} days of supply, no inbound shipment`
+        : `Critical low stock — ${item.daysOfSupply.toFixed(0)} days of supply`;
+      alerts.push(makeAlert("low-inventory", "critical", item, msg, seq++));
     } else if (item.weeksOfSupply < 2) {
-      alerts.push(makeAlert("low-inventory", "warning", item, `Low stock — ${item.weeksOfSupply.toFixed(1)} weeks of supply`));
+      alerts.push(makeAlert("low-inventory", "warning", item, `Low stock — ${item.weeksOfSupply.toFixed(1)} weeks of supply`, seq++));
     }
 
     if (item.status === "overstock-risk") {
-      alerts.push(makeAlert("overstock", "warning", item, `Overstock risk — ${item.weeksOfSupply.toFixed(1)} weeks of supply`));
+      alerts.push(makeAlert("overstock", "warning", item, `Overstock risk — ${item.weeksOfSupply.toFixed(1)} weeks of supply`, seq++));
     }
 
     if (sales && sales.unitsSold30d === 0 && item.onHand > 0) {
-      alerts.push(makeAlert("no-sales", "warning", item, "No sales in 30 days with inventory on hand"));
+      alerts.push(makeAlert("no-sales", "warning", item, "No sales in 30 days with inventory on hand", seq++));
     }
 
     if (sales && sales.trend === "declining") {
-      alerts.push(makeAlert("aged-inventory", "info", item, "Sales declining — monitor for aged inventory"));
+      alerts.push(makeAlert("aged-inventory", "info", item, "Sales declining — monitor for aged inventory", seq++));
     }
   }
 
@@ -151,10 +155,11 @@ function makeAlert(
   type: AlertType,
   severity: Alert["severity"],
   item: InventoryItem,
-  message: string
+  message: string,
+  seq: number
 ): Alert {
   return {
-    id: `${type}-${item.sku}-${Date.now()}`,
+    id: `${type}-${item.sku}-${seq}`,
     type,
     severity,
     sku: item.sku,

@@ -4,6 +4,7 @@
  */
 
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import * as walmartApi from "@/services/walmartApi";
 import * as biz from "@/services/businessLogic";
 import type {
@@ -20,244 +21,251 @@ import type {
 // ─── Overview ───────────────────────────────────────────
 export const getOverview = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardOverview> => {
-    try {
-      const [inventoryData, ordersData, inboundData] = await Promise.all([
-        walmartApi.getWfsInventory(),
-        walmartApi.getOrders({
-          createdStartDate: thirtyDaysAgo(),
-        }),
-        walmartApi.getInboundShipments(),
-      ]);
+    const [inventoryResult, ordersResult] = await Promise.allSettled([
+      fetchAllInventory(),
+      fetchAllOrders(daysAgo(30)),
+    ]);
 
-      const inventory = parseInventoryResponse(inventoryData);
-      const orders = parseOrdersResponse(ordersData);
-      const salesByDay = aggregateOrdersByDay(orders);
-      const salesBySku = aggregateOrdersBySku(orders);
-
-      const enriched = inventory.map((item) => {
-        const skuSales = salesBySku.get(item.sku);
-        return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
-      });
-
-      const today = new Date();
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().slice(0, 10);
-
-      return {
-        totalWfsInventory: enriched.reduce((sum, i) => sum + i.onHand, 0),
-        salesYesterday: salesByDay.get(yesterdayStr) ?? 0,
-        salesLast7Days: computeSalesRange(salesByDay, 7),
-        salesMTD: computeSalesMTD(salesByDay),
-        inboundUnits: enriched.reduce((sum, i) => sum + i.inbound, 0),
-        lowStockCount: enriched.filter(
-          (i) => i.status === "replenish-immediately" || i.status === "replenish-soon"
-        ).length,
-        overstockCount: enriched.filter((i) => i.status === "overstock-risk").length,
-        agedInventoryCount: enriched.filter((i) => i.status === "no-sales-risk").length,
-      };
-    } catch (error) {
-      console.error("Failed to fetch overview:", error);
-      throw new Error(
-        `Failed to load dashboard overview: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
+    if (inventoryResult.status === "rejected") {
+      throw new Error(`Failed to load dashboard overview: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
     }
+
+    const inventory = inventoryResult.value;
+    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+
+    const salesByDay = aggregateOrdersByDay(orders);
+    const salesBySku = aggregateOrdersBySku(orders);
+
+    const enriched = inventory.map((item) => {
+      const skuSales = salesBySku.get(item.sku);
+      return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
+    });
+
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+    return {
+      totalWfsInventory: enriched.reduce((sum, i) => sum + i.onHand, 0),
+      salesYesterday: salesByDay.get(yesterdayStr) ?? 0,
+      salesLast7Days: computeSalesRange(salesByDay, 7),
+      salesMTD: computeSalesMTD(salesByDay),
+      inboundUnits: enriched.reduce((sum, i) => sum + i.inbound, 0),
+      lowStockCount: enriched.filter(
+        (i) => i.status === "replenish-immediately" || i.status === "replenish-soon"
+      ).length,
+      overstockCount: enriched.filter((i) => i.status === "overstock-risk").length,
+      agedInventoryCount: enriched.filter((i) => i.status === "no-sales-risk").length,
+    };
   }
 );
 
 // ─── Inventory ──────────────────────────────────────────
 export const getInventoryHealth = createServerFn({ method: "GET" }).handler(
   async (): Promise<InventoryItem[]> => {
-    try {
-      const [inventoryData, ordersData] = await Promise.all([
-        walmartApi.getWfsInventory(),
-        walmartApi.getOrders({ createdStartDate: thirtyDaysAgo() }),
-      ]);
+    const [inventoryResult, ordersResult] = await Promise.allSettled([
+      fetchAllInventory(),
+      fetchAllOrders(daysAgo(30)),
+    ]);
 
-      const inventory = parseInventoryResponse(inventoryData);
-      const salesBySku = aggregateOrdersBySku(parseOrdersResponse(ordersData));
-
-      return inventory.map((item) => {
-        const skuSales = salesBySku.get(item.sku);
-        return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
-      });
-    } catch (error) {
-      console.error("Failed to fetch inventory:", error);
-      throw new Error(
-        `Failed to load inventory: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
+    if (inventoryResult.status === "rejected") {
+      throw new Error(`Failed to load inventory: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
     }
+
+    const inventory = inventoryResult.value;
+    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const salesBySku = aggregateOrdersBySku(orders);
+
+    return inventory.map((item) => {
+      const skuSales = salesBySku.get(item.sku);
+      return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
+    });
   }
 );
 
 // ─── Sales ──────────────────────────────────────────────
 export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
-    try {
-      const ordersData = await walmartApi.getOrders({
-        createdStartDate: thirtyDaysAgo(),
-      });
+    const orders = await fetchAllOrders(daysAgo(30));
+    const salesBySku = aggregateOrdersBySku(orders);
+    const dailyTrends = aggregateDailyTrends(orders);
 
-      const orders = parseOrdersResponse(ordersData);
-      const salesBySku = aggregateOrdersBySku(orders);
-      const dailyTrends = aggregateDailyTrends(orders);
+    const salesData: SalesData[] = Array.from(salesBySku.values()).map((s) => ({
+      ...s,
+      velocity: biz.computeVelocity(s.unitsSold30d),
+      trend: biz.determineTrend(s.unitsSold7d, s.unitsSold30d),
+    }));
 
-      const salesData: SalesData[] = Array.from(salesBySku.values()).map((s) => ({
-        ...s,
-        velocity: biz.computeVelocity(s.unitsSold30d),
-        trend: biz.determineTrend(s.unitsSold7d, s.unitsSold30d),
-      }));
-
-      return { salesData, trends: dailyTrends };
-    } catch (error) {
-      console.error("Failed to fetch sales:", error);
-      throw new Error(
-        `Failed to load sales data: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
-    }
+    return { salesData, trends: dailyTrends };
   }
 );
 
 // ─── Replenishment ──────────────────────────────────────
 export const getReplenishmentPlan = createServerFn({ method: "GET" }).handler(
   async (): Promise<ReplenishmentItem[]> => {
-    try {
-      const [inventoryData, ordersData] = await Promise.all([
-        walmartApi.getWfsInventory(),
-        walmartApi.getOrders({ createdStartDate: thirtyDaysAgo() }),
-      ]);
+    const [inventoryResult, ordersResult] = await Promise.allSettled([
+      fetchAllInventory(),
+      fetchAllOrders(daysAgo(30)),
+    ]);
 
-      const inventory = parseInventoryResponse(inventoryData);
-      const orders = parseOrdersResponse(ordersData);
-      const salesBySku = aggregateOrdersBySku(orders);
-
-      const enriched = inventory.map((item) => {
-        const skuSales = salesBySku.get(item.sku);
-        return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
-      });
-
-      const salesData: SalesData[] = Array.from(salesBySku.values()).map((s) => ({
-        ...s,
-        velocity: biz.computeVelocity(s.unitsSold30d),
-        trend: biz.determineTrend(s.unitsSold7d, s.unitsSold30d),
-      }));
-
-      return biz.buildReplenishmentPlan(enriched, salesData);
-    } catch (error) {
-      console.error("Failed to build replenishment plan:", error);
-      throw new Error(
-        `Failed to load replenishment plan: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
+    if (inventoryResult.status === "rejected") {
+      throw new Error(`Failed to load replenishment plan: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
     }
+
+    const inventory = inventoryResult.value;
+    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const salesBySku = aggregateOrdersBySku(orders);
+
+    const enriched = inventory.map((item) => {
+      const skuSales = salesBySku.get(item.sku);
+      return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
+    });
+
+    const salesData: SalesData[] = Array.from(salesBySku.values()).map((s) => ({
+      ...s,
+      velocity: biz.computeVelocity(s.unitsSold30d),
+      trend: biz.determineTrend(s.unitsSold7d, s.unitsSold30d),
+    }));
+
+    return biz.buildReplenishmentPlan(enriched, salesData);
   }
 );
 
 // ─── Inbound Shipments ──────────────────────────────────
 export const getInboundShipmentsList = createServerFn({ method: "GET" }).handler(
   async (): Promise<InboundShipment[]> => {
-    try {
-      const data = await walmartApi.getInboundShipments();
-      return parseInboundResponse(data);
-    } catch (error) {
-      console.error("Failed to fetch inbound shipments:", error);
-      throw new Error(
-        `Failed to load inbound shipments: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
-    }
+    const data = await walmartApi.getInboundShipments();
+    return parseInboundResponse(data);
   }
 );
 
 // ─── Alerts ─────────────────────────────────────────────
 export const getAlerts = createServerFn({ method: "GET" }).handler(
   async (): Promise<Alert[]> => {
-    try {
-      const [inventoryData, ordersData] = await Promise.all([
-        walmartApi.getWfsInventory(),
-        walmartApi.getOrders({ createdStartDate: thirtyDaysAgo() }),
-      ]);
+    const [inventoryResult, ordersResult] = await Promise.allSettled([
+      fetchAllInventory(),
+      fetchAllOrders(daysAgo(30)),
+    ]);
 
-      const inventory = parseInventoryResponse(inventoryData);
-      const orders = parseOrdersResponse(ordersData);
-      const salesBySku = aggregateOrdersBySku(orders);
-
-      const enriched = inventory.map((item) => {
-        const skuSales = salesBySku.get(item.sku);
-        return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
-      });
-
-      const salesData: SalesData[] = Array.from(salesBySku.values()).map((s) => ({
-        ...s,
-        velocity: biz.computeVelocity(s.unitsSold30d),
-        trend: biz.determineTrend(s.unitsSold7d, s.unitsSold30d),
-      }));
-
-      return biz.generateAlerts(enriched, salesData);
-    } catch (error) {
-      console.error("Failed to generate alerts:", error);
-      throw new Error(
-        `Failed to load alerts: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
+    if (inventoryResult.status === "rejected") {
+      throw new Error(`Failed to load alerts: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
     }
+
+    const inventory = inventoryResult.value;
+    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const salesBySku = aggregateOrdersBySku(orders);
+
+    const enriched = inventory.map((item) => {
+      const skuSales = salesBySku.get(item.sku);
+      return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
+    });
+
+    const salesData: SalesData[] = Array.from(salesBySku.values()).map((s) => ({
+      ...s,
+      velocity: biz.computeVelocity(s.unitsSold30d),
+      trend: biz.determineTrend(s.unitsSold7d, s.unitsSold30d),
+    }));
+
+    return biz.generateAlerts(enriched, salesData);
   }
 );
 
 // ─── SKU Detail ─────────────────────────────────────────
 export const getSkuDetail = createServerFn({ method: "POST" })
-  .inputValidator((data: { sku: string }) => data)
+  .inputValidator((data: unknown) =>
+    z.object({ sku: z.string().min(1).max(50).regex(/^[\w\-]+$/) }).parse(data)
+  )
   .handler(async ({ data }): Promise<SkuDetail> => {
-    try {
-      const { sku } = data;
-      const [inventoryData, ordersData, inboundData] = await Promise.all([
-        walmartApi.getInventoryForSku(sku),
-        walmartApi.getOrders({ createdStartDate: thirtyDaysAgo() }),
-        walmartApi.getInboundShipments(),
-      ]);
+    const { sku } = data;
 
-      const rawInventory = parseInventoryResponse(inventoryData);
-      const rawItem = rawInventory.find((i) => i.sku === sku);
+    const [inventoryResult, ordersResult, inboundResult] = await Promise.allSettled([
+      walmartApi.getInventoryForSku(sku),
+      fetchAllOrders(daysAgo(30)),
+      walmartApi.getInboundShipments(),
+    ]);
 
-      if (!rawItem) {
-        throw new Error(`SKU ${sku} not found`);
-      }
-
-      const orders = parseOrdersResponse(ordersData);
-      const skuOrders = orders.filter((o) => o.sku === sku);
-      const unitsSold30d = skuOrders.reduce((sum, o) => sum + o.qty, 0);
-      const velocity = biz.computeVelocity(unitsSold30d);
-
-      const enriched = biz.enrichInventoryItem(rawItem, unitsSold30d);
-      const salesHistory = aggregateDailyTrends(skuOrders);
-      const inboundShipments = parseInboundResponse(inboundData).filter((s) =>
-        s.skus.includes(sku)
-      );
-
-      const recommendation = biz.getActionText(enriched.status, enriched.inbound);
-
-      return {
-        sku,
-        productName: enriched.productName,
-        inventory: enriched,
-        salesHistory,
-        velocity,
-        inboundHistory: inboundShipments,
-        status: enriched.status,
-        recommendation,
-      };
-    } catch (error) {
-      console.error(`Failed to fetch SKU detail for ${data.sku}:`, error);
-      throw new Error(
-        `Failed to load SKU detail: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
+    if (inventoryResult.status === "rejected") {
+      throw new Error(`Failed to load SKU detail: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
     }
+
+    const rawInventory = parseInventoryResponse(inventoryResult.value);
+    const rawItem = rawInventory.find((i) => i.sku === sku);
+
+    if (!rawItem) {
+      throw new Error(`SKU ${sku} not found`);
+    }
+
+    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const skuOrders = orders.filter((o) => o.sku === sku);
+    const unitsSold30d = skuOrders.reduce((sum, o) => sum + o.qty, 0);
+    const velocity = biz.computeVelocity(unitsSold30d);
+
+    const enriched = biz.enrichInventoryItem(rawItem, unitsSold30d);
+    const salesHistory = aggregateDailyTrends(skuOrders);
+    const inboundShipments =
+      inboundResult.status === "fulfilled"
+        ? parseInboundResponse(inboundResult.value).filter((s) => s.skus.includes(sku))
+        : [];
+
+    const recommendation = biz.getActionText(enriched.status, enriched.inbound);
+
+    return {
+      sku,
+      productName: enriched.productName,
+      inventory: enriched,
+      salesHistory,
+      velocity,
+      inboundHistory: inboundShipments,
+      status: enriched.status,
+      recommendation,
+    };
   });
 
-// ─── Helpers ────────────────────────────────────────────
+// ─── Paginating Helpers ──────────────────────────────────
 
-function thirtyDaysAgo(): string {
+type RawInventoryItem = {
+  sku: string;
+  productName: string;
+  onHand: number;
+  availableToSell: number;
+  reserved: number;
+  inbound: number;
+  lastUpdated: string;
+};
+
+async function fetchAllInventory(): Promise<RawInventoryItem[]> {
+  const items: RawInventoryItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await walmartApi.getWfsInventory(cursor);
+    items.push(...parseInventoryResponse(page));
+    cursor = page?.nextCursor;
+  } while (cursor);
+  return items;
+}
+
+async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
+  const orders: RawOrder[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await walmartApi.getOrders({ createdStartDate: startDate, nextCursor: cursor });
+    orders.push(...parseOrdersResponse(page));
+    // Walmart orders API surfaces nextCursor in either location
+    cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
+  } while (cursor);
+  return orders;
+}
+
+// ─── Date Helpers ────────────────────────────────────────
+
+function daysAgo(n: number): string {
   const d = new Date();
-  d.setDate(d.getDate() - 30);
+  d.setDate(d.getDate() - n);
   return d.toISOString();
 }
+
+// ─── Parsers ────────────────────────────────────────────
 
 interface RawOrder {
   sku: string;
@@ -266,7 +274,6 @@ interface RawOrder {
   revenue: number;
   date: string;
 }
-
 
 function normalizeOrderDate(rawDate: unknown): string {
   if (!rawDate) return new Date().toISOString().slice(0, 10);
@@ -306,26 +313,19 @@ function normalizeOrderDate(rawDate: unknown): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function parseInventoryResponse(data: any): Array<{
-  sku: string;
-  productName: string;
-  onHand: number;
-  availableToSell: number;
-  reserved: number;
-  inbound: number;
-  lastUpdated: string;
-}> {
-  // Adapt based on actual Walmart API response structure
+function parseInventoryResponse(data: any): RawInventoryItem[] {
   const items = data?.inventory?.elements ?? data?.elements ?? data?.items ?? [];
-  return items.map((item: any) => ({
-    sku: item.sku ?? item.SKU ?? "",
-    productName: item.productName ?? item.product_name ?? item.sku ?? "",
-    onHand: item.quantity?.amount ?? item.onHand ?? item.qty ?? 0,
-    availableToSell: item.availableToSellQty ?? item.available ?? item.quantity?.amount ?? 0,
-    reserved: item.reservedQty ?? item.reserved ?? 0,
-    inbound: item.inboundQty ?? item.inbound ?? 0,
-    lastUpdated: item.lastUpdatedTs ?? item.lastUpdated ?? new Date().toISOString(),
-  }));
+  return items
+    .map((item: any) => ({
+      sku: item.sku ?? item.SKU ?? "",
+      productName: item.productName ?? item.product_name ?? item.sku ?? "",
+      onHand: item.quantity?.amount ?? item.onHand ?? item.qty ?? 0,
+      availableToSell: item.availableToSellQty ?? item.available ?? item.quantity?.amount ?? 0,
+      reserved: item.reservedQty ?? item.reserved ?? 0,
+      inbound: item.inboundQty ?? item.inbound ?? 0,
+      lastUpdated: item.lastUpdatedTs ?? item.lastUpdated ?? new Date().toISOString(),
+    }))
+    .filter((item: RawInventoryItem) => item.sku !== "");
 }
 
 function parseOrdersResponse(data: any): RawOrder[] {
@@ -365,6 +365,8 @@ function parseInboundResponse(data: any): InboundShipment[] {
     skus: (s.items ?? s.orderItems ?? []).map((i: any) => i.sku ?? ""),
   }));
 }
+
+// ─── Aggregators ────────────────────────────────────────
 
 function aggregateOrdersBySku(
   orders: RawOrder[]
