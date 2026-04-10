@@ -106,8 +106,8 @@ function InventoryPage() {
                   <Td className="text-right">{item.availableToSell.toLocaleString()}</Td>
                   <Td className="text-right">{item.reserved.toLocaleString()}</Td>
                   <Td className="text-right">{item.inbound.toLocaleString()}</Td>
-                  <Td className="text-right">{item.daysOfSupply > 999 ? "999+" : item.daysOfSupply.toFixed(0)}</Td>
-                  <Td className="text-right">{item.weeksOfSupply > 99 ? "99+" : item.weeksOfSupply.toFixed(1)}</Td>
+                  <Td className="text-right">{isFinite(item.daysOfSupply) ? item.daysOfSupply.toFixed(0) : "∞"}</Td>
+                  <Td className="text-right">{isFinite(item.weeksOfSupply) ? item.weeksOfSupply.toFixed(1) : "∞"}</Td>
                   <Td>
                     <StatusBadge variant={statusVariant(item.status)}>
                       {statusLabel(item.status)}

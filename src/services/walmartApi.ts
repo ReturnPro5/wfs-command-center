@@ -15,11 +15,12 @@ async function walmartFetch<T>(path: string, options: RequestInit = {}): Promise
 
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
+    signal: AbortSignal.timeout(30_000),
     headers: {
-      "Authorization": `Basic ${token}`, // Walmart uses the token in this header
       "WM_SEC.ACCESS_TOKEN": token,
       "WM_SVC.NAME": "Walmart Marketplace",
       "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
+      "WM_MARKET": "walmart.com",
       "Accept": "application/json",
       "Content-Type": "application/json",
       ...options.headers,

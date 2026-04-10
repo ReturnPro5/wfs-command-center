@@ -94,7 +94,7 @@ function ReplenishmentPage() {
                   <Td className="max-w-[200px] truncate">{item.productName}</Td>
                   <Td className="text-right font-medium">{item.onHand.toLocaleString()}</Td>
                   <Td className="text-right font-mono">{item.velocity.toFixed(1)}/day</Td>
-                  <Td className="text-right">{item.weeksOfSupply > 99 ? "99+" : item.weeksOfSupply.toFixed(1)}</Td>
+                  <Td className="text-right">{isFinite(item.weeksOfSupply) ? item.weeksOfSupply.toFixed(1) : "∞"}</Td>
                   <Td className="text-right">{item.inboundUnits.toLocaleString()}</Td>
                   <Td className="text-right font-semibold">{item.recommendedQty.toLocaleString()}</Td>
                   <Td>

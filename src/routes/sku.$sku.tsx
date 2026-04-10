@@ -61,7 +61,7 @@ function SkuDetailPage() {
               <KpiCard title="Velocity" value={`${data.velocity.toFixed(1)}/day`} icon={TrendingUp} />
               <KpiCard
                 title="Weeks of Supply"
-                value={data.inventory.weeksOfSupply > 99 ? "99+" : data.inventory.weeksOfSupply.toFixed(1)}
+                value={isFinite(data.inventory.weeksOfSupply) ? data.inventory.weeksOfSupply.toFixed(1) : "∞"}
                 icon={Info}
                 variant={(() => {
                   const v = statusVariant(data.status);
@@ -88,7 +88,7 @@ function SkuDetailPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Days of Supply</p>
-                  <p className="text-lg font-bold">{data.inventory.daysOfSupply > 999 ? "999+" : data.inventory.daysOfSupply.toFixed(0)}</p>
+                  <p className="text-lg font-bold">{isFinite(data.inventory.daysOfSupply) ? data.inventory.daysOfSupply.toFixed(0) : "∞"}</p>
                 </div>
               </div>
             </div>
