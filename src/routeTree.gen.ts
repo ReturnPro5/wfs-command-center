@@ -9,38 +9,155 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SalesRouteImport } from './routes/sales'
+import { Route as ReplenishmentRouteImport } from './routes/replenishment'
+import { Route as InventoryRouteImport } from './routes/inventory'
+import { Route as InboundRouteImport } from './routes/inbound'
+import { Route as AlertsRouteImport } from './routes/alerts'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SkuSkuRouteImport } from './routes/sku.$sku'
 
+const SalesRoute = SalesRouteImport.update({
+  id: '/sales',
+  path: '/sales',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReplenishmentRoute = ReplenishmentRouteImport.update({
+  id: '/replenishment',
+  path: '/replenishment',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InventoryRoute = InventoryRouteImport.update({
+  id: '/inventory',
+  path: '/inventory',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InboundRoute = InboundRouteImport.update({
+  id: '/inbound',
+  path: '/inbound',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AlertsRoute = AlertsRouteImport.update({
+  id: '/alerts',
+  path: '/alerts',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkuSkuRoute = SkuSkuRouteImport.update({
+  id: '/sku/$sku',
+  path: '/sku/$sku',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/alerts': typeof AlertsRoute
+  '/inbound': typeof InboundRoute
+  '/inventory': typeof InventoryRoute
+  '/replenishment': typeof ReplenishmentRoute
+  '/sales': typeof SalesRoute
+  '/sku/$sku': typeof SkuSkuRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/alerts': typeof AlertsRoute
+  '/inbound': typeof InboundRoute
+  '/inventory': typeof InventoryRoute
+  '/replenishment': typeof ReplenishmentRoute
+  '/sales': typeof SalesRoute
+  '/sku/$sku': typeof SkuSkuRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/alerts': typeof AlertsRoute
+  '/inbound': typeof InboundRoute
+  '/inventory': typeof InventoryRoute
+  '/replenishment': typeof ReplenishmentRoute
+  '/sales': typeof SalesRoute
+  '/sku/$sku': typeof SkuSkuRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/alerts'
+    | '/inbound'
+    | '/inventory'
+    | '/replenishment'
+    | '/sales'
+    | '/sku/$sku'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/alerts'
+    | '/inbound'
+    | '/inventory'
+    | '/replenishment'
+    | '/sales'
+    | '/sku/$sku'
+  id:
+    | '__root__'
+    | '/'
+    | '/alerts'
+    | '/inbound'
+    | '/inventory'
+    | '/replenishment'
+    | '/sales'
+    | '/sku/$sku'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AlertsRoute: typeof AlertsRoute
+  InboundRoute: typeof InboundRoute
+  InventoryRoute: typeof InventoryRoute
+  ReplenishmentRoute: typeof ReplenishmentRoute
+  SalesRoute: typeof SalesRoute
+  SkuSkuRoute: typeof SkuSkuRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/sales': {
+      id: '/sales'
+      path: '/sales'
+      fullPath: '/sales'
+      preLoaderRoute: typeof SalesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/replenishment': {
+      id: '/replenishment'
+      path: '/replenishment'
+      fullPath: '/replenishment'
+      preLoaderRoute: typeof ReplenishmentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/inventory': {
+      id: '/inventory'
+      path: '/inventory'
+      fullPath: '/inventory'
+      preLoaderRoute: typeof InventoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/inbound': {
+      id: '/inbound'
+      path: '/inbound'
+      fullPath: '/inbound'
+      preLoaderRoute: typeof InboundRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/alerts': {
+      id: '/alerts'
+      path: '/alerts'
+      fullPath: '/alerts'
+      preLoaderRoute: typeof AlertsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -48,11 +165,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sku/$sku': {
+      id: '/sku/$sku'
+      path: '/sku/$sku'
+      fullPath: '/sku/$sku'
+      preLoaderRoute: typeof SkuSkuRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AlertsRoute: AlertsRoute,
+  InboundRoute: InboundRoute,
+  InventoryRoute: InventoryRoute,
+  ReplenishmentRoute: ReplenishmentRoute,
+  SalesRoute: SalesRoute,
+  SkuSkuRoute: SkuSkuRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
