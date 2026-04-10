@@ -21,17 +21,7 @@ import type {
 // ─── Overview ───────────────────────────────────────────
 export const getOverview = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardOverview> => {
-    const [inventoryResult, ordersResult] = await Promise.allSettled([
-      fetchAllInventory(),
-      fetchAllOrders(daysAgo(30)),
-    ]);
-
-    if (inventoryResult.status === "rejected") {
-      throw new Error(`Failed to load dashboard overview: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
-    }
-
-    const inventory = inventoryResult.value;
-    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const { inventory, orders } = await loadInventoryAndOrders("dashboard overview");
 
     const salesByDay = aggregateOrdersByDay(orders);
     const salesBySku = aggregateOrdersBySku(orders);
@@ -64,17 +54,7 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
 // ─── Inventory ──────────────────────────────────────────
 export const getInventoryHealth = createServerFn({ method: "GET" }).handler(
   async (): Promise<InventoryItem[]> => {
-    const [inventoryResult, ordersResult] = await Promise.allSettled([
-      fetchAllInventory(),
-      fetchAllOrders(daysAgo(30)),
-    ]);
-
-    if (inventoryResult.status === "rejected") {
-      throw new Error(`Failed to load inventory: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
-    }
-
-    const inventory = inventoryResult.value;
-    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const { inventory, orders } = await loadInventoryAndOrders("inventory");
     const salesBySku = aggregateOrdersBySku(orders);
 
     return inventory.map((item) => {
@@ -104,17 +84,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
 // ─── Replenishment ──────────────────────────────────────
 export const getReplenishmentPlan = createServerFn({ method: "GET" }).handler(
   async (): Promise<ReplenishmentItem[]> => {
-    const [inventoryResult, ordersResult] = await Promise.allSettled([
-      fetchAllInventory(),
-      fetchAllOrders(daysAgo(30)),
-    ]);
-
-    if (inventoryResult.status === "rejected") {
-      throw new Error(`Failed to load replenishment plan: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
-    }
-
-    const inventory = inventoryResult.value;
-    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const { inventory, orders } = await loadInventoryAndOrders("replenishment plan");
     const salesBySku = aggregateOrdersBySku(orders);
 
     const enriched = inventory.map((item) => {
@@ -143,17 +113,7 @@ export const getInboundShipmentsList = createServerFn({ method: "GET" }).handler
 // ─── Alerts ─────────────────────────────────────────────
 export const getAlerts = createServerFn({ method: "GET" }).handler(
   async (): Promise<Alert[]> => {
-    const [inventoryResult, ordersResult] = await Promise.allSettled([
-      fetchAllInventory(),
-      fetchAllOrders(daysAgo(30)),
-    ]);
-
-    if (inventoryResult.status === "rejected") {
-      throw new Error(`Failed to load alerts: ${inventoryResult.reason?.message ?? "inventory unavailable"}`);
-    }
-
-    const inventory = inventoryResult.value;
-    const orders = ordersResult.status === "fulfilled" ? ordersResult.value : [];
+    const { inventory, orders, inventoryUnavailable } = await loadInventoryAndOrders("alerts");
     const salesBySku = aggregateOrdersBySku(orders);
 
     const enriched = inventory.map((item) => {
@@ -167,7 +127,16 @@ export const getAlerts = createServerFn({ method: "GET" }).handler(
       trend: biz.determineTrend(s.unitsSold7d, s.unitsSold30d),
     }));
 
-    return biz.generateAlerts(enriched, salesData);
+    const alerts = biz.generateAlerts(enriched, salesData);
+
+    if (inventoryUnavailable) {
+      return [
+        makeSystemAlert("Inventory data is temporarily unavailable from Walmart. Retry in a few minutes."),
+        ...alerts,
+      ];
+    }
+
+    return alerts;
   }
 );
 
@@ -273,6 +242,92 @@ interface RawOrder {
   qty: number;
   revenue: number;
   date: string;
+}
+
+type InventoryAndOrdersResult = {
+  inventory: RawInventoryItem[];
+  orders: RawOrder[];
+  inventoryUnavailable: boolean;
+};
+
+async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
+  const [inventoryResult, ordersResult] = await Promise.allSettled([
+    fetchAllInventory(),
+    fetchAllOrders(daysAgo(30)),
+  ]);
+
+  const inventoryState = resolveInventoryResult(inventoryResult, context);
+  const orders = resolveOrdersResult(ordersResult, context);
+
+  return {
+    inventory: inventoryState.data,
+    orders,
+    inventoryUnavailable: inventoryState.unavailable,
+  };
+}
+
+function resolveInventoryResult(
+  result: PromiseSettledResult<RawInventoryItem[]>,
+  context: string
+): { data: RawInventoryItem[]; unavailable: boolean } {
+  if (result.status === "fulfilled") {
+    return { data: result.value, unavailable: false };
+  }
+
+  const message = getErrorMessage(result.reason, "inventory unavailable");
+
+  if (isRecoverableWalmartError(result.reason)) {
+    console.warn(`[WFS] ${context}: inventory temporarily unavailable, using empty fallback. ${message}`);
+    return { data: [], unavailable: true };
+  }
+
+  throw new Error(`Failed to load ${context}: ${message}`);
+}
+
+function resolveOrdersResult(
+  result: PromiseSettledResult<RawOrder[]>,
+  context: string
+): RawOrder[] {
+  if (result.status === "fulfilled") {
+    return result.value;
+  }
+
+  console.warn(
+    `[WFS] ${context}: orders temporarily unavailable, using empty fallback. ${getErrorMessage(result.reason, "orders unavailable")}`
+  );
+  return [];
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return fallback;
+}
+
+function isRecoverableWalmartError(error: unknown): boolean {
+  const message = getErrorMessage(error, "");
+  const maybeError = error as { name?: string; cause?: { code?: string } } | null;
+  const statusMatch = message.match(/Walmart API error \[(\d+)\]/);
+  const status = statusMatch ? Number(statusMatch[1]) : null;
+
+  return (
+    maybeError?.name === "AbortError" ||
+    maybeError?.name === "TimeoutError" ||
+    maybeError?.cause?.code === "UND_ERR_CONNECT_TIMEOUT" ||
+    status === 429 ||
+    (status !== null && status >= 500) ||
+    message.includes("SYSTEM_ERROR.GMP_GATEWAY_API")
+  );
+}
+
+function makeSystemAlert(message: string): Alert {
+  return {
+    id: `system-${Date.now()}`,
+    type: "system",
+    severity: "warning",
+    message,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 function normalizeOrderDate(rawDate: unknown): string {
