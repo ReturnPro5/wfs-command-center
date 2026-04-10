@@ -78,7 +78,8 @@ export type AlertType =
   | "aged-inventory"
   | "inbound-delay"
   | "not-sellable"
-  | "overstock";
+  | "overstock"
+  | "system";
 
 export interface SkuDetail {
   sku: string;
