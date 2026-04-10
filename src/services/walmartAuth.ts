@@ -17,7 +17,7 @@ export async function getWalmartAccessToken(): Promise<string> {
   const clientSecret = process.env.WALMART_CLIENT_SECRET;
   const baseUrl = process.env.WALMART_API_BASE_URL || "https://marketplace.walmartapis.com";
 
-  console.log("[WalmartAuth] clientId present:", !!clientId, "clientSecret present:", !!clientSecret);
+  
 
   if (!clientId || !clientSecret) {
     throw new Error("WALMART_CLIENT_ID and WALMART_CLIENT_SECRET must be configured");
