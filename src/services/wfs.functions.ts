@@ -295,16 +295,22 @@ function parseOrdersResponse(data: any): RawOrder[] {
 
   for (const order of orderList) {
     const lines = order.orderLines?.orderLine ?? order.lines ?? [];
-    const orderDate = order.orderDate ?? order.createdDate ?? "";
+    const rawDate = order.orderDate ?? order.createdDate ?? "";
+    // orderDate may be a string, number (epoch), or Date — normalize to string
+    const orderDate = typeof rawDate === "number"
+      ? new Date(rawDate).toISOString()
+      : typeof rawDate === "object" && rawDate instanceof Date
+        ? rawDate.toISOString()
+        : String(rawDate || "");
 
     for (const line of lines) {
       result.push({
         sku: line.item?.sku ?? line.sku ?? "",
         productName: line.item?.productName ?? line.productName ?? "",
-        qty: line.orderLineQuantity?.amount ?? line.quantity ?? 1,
+        qty: Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1),
         revenue:
-          (line.charges?.charge?.[0]?.chargeAmount?.amount ?? line.price ?? 0) *
-          (line.orderLineQuantity?.amount ?? line.quantity ?? 1),
+          Number(line.charges?.charge?.[0]?.chargeAmount?.amount ?? line.price ?? 0) *
+          Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1),
         date: orderDate.slice(0, 10),
       });
     }
