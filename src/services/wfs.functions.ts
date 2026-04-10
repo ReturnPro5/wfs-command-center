@@ -267,6 +267,45 @@ interface RawOrder {
   date: string;
 }
 
+
+function normalizeOrderDate(rawDate: unknown): string {
+  if (!rawDate) return new Date().toISOString().slice(0, 10);
+
+  if (rawDate instanceof Date) {
+    return rawDate.toISOString().slice(0, 10);
+  }
+
+  if (typeof rawDate === "number") {
+    const epochMs = rawDate < 1_000_000_000_000 ? rawDate * 1000 : rawDate;
+    return new Date(epochMs).toISOString().slice(0, 10);
+  }
+
+  if (typeof rawDate === "string") {
+    const trimmed = rawDate.trim();
+    if (!trimmed) return new Date().toISOString().slice(0, 10);
+
+    if (/^\d+$/.test(trimmed)) {
+      const numeric = Number(trimmed);
+      const epochMs = numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+      return new Date(epochMs).toISOString().slice(0, 10);
+    }
+
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 10);
+    }
+
+    return trimmed.slice(0, 10);
+  }
+
+  if (typeof rawDate === "object") {
+    const maybeDateLike = rawDate as { value?: string | number; date?: string | number; timestamp?: string | number };
+    return normalizeOrderDate(maybeDateLike.value ?? maybeDateLike.date ?? maybeDateLike.timestamp ?? null);
+  }
+
+  return new Date().toISOString().slice(0, 10);
+}
+
 function parseInventoryResponse(data: any): Array<{
   sku: string;
   productName: string;
@@ -295,13 +334,8 @@ function parseOrdersResponse(data: any): RawOrder[] {
 
   for (const order of orderList) {
     const lines = order.orderLines?.orderLine ?? order.lines ?? [];
-    const rawDate = order.orderDate ?? order.createdDate ?? "";
-    // orderDate may be a string, number (epoch), or Date — normalize to string
-    const orderDate = typeof rawDate === "number"
-      ? new Date(rawDate).toISOString()
-      : typeof rawDate === "object" && rawDate instanceof Date
-        ? rawDate.toISOString()
-        : String(rawDate || "");
+    const rawDate = order.orderDate ?? order.createdDate ?? order.orderDateTime ?? order.createdAt ?? null;
+    const normalizedOrderDate = normalizeOrderDate(rawDate);
 
     for (const line of lines) {
       result.push({
@@ -311,7 +345,7 @@ function parseOrdersResponse(data: any): RawOrder[] {
         revenue:
           Number(line.charges?.charge?.[0]?.chargeAmount?.amount ?? line.price ?? 0) *
           Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1),
-        date: orderDate.slice(0, 10),
+        date: normalizedOrderDate,
       });
     }
   }
