@@ -67,7 +67,16 @@ export const getInventoryHealth = createServerFn({ method: "GET" }).handler(
 // ─── Sales ──────────────────────────────────────────────
 export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
-    const orders = await fetchAllOrders(daysAgo(30));
+    let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
+    try {
+      orders = await fetchAllOrders(daysAgo(30));
+    } catch (err) {
+      if (isRecoverableWalmartError(err)) {
+        console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
+      } else {
+        throw err;
+      }
+    }
     const salesBySku = aggregateOrdersBySku(orders);
     const dailyTrends = aggregateDailyTrends(orders);
 
