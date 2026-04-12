@@ -222,26 +222,33 @@ type RawInventoryItem = {
   lastUpdated: string;
 };
 
+const MAX_PAGES = 3; // Limit pagination to avoid Worker timeouts (Cloudflare has ~30s limit)
+
 async function fetchAllInventory(): Promise<RawInventoryItem[]> {
   const items: RawInventoryItem[] = [];
   let cursor: string | undefined;
+  let pages = 0;
   do {
     const page = await walmartApi.getWfsInventory(cursor);
     items.push(...parseInventoryResponse(page));
     cursor = page?.nextCursor;
-  } while (cursor);
+    pages++;
+  } while (cursor && pages < MAX_PAGES);
+  if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES} pages (${items.length} items)`);
   return items;
 }
 
 async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
   const orders: RawOrder[] = [];
   let cursor: string | undefined;
+  let pages = 0;
   do {
     const page = await walmartApi.getOrders({ createdStartDate: startDate, nextCursor: cursor });
     orders.push(...parseOrdersResponse(page));
-    // Walmart orders API surfaces nextCursor in either location
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
-  } while (cursor);
+    pages++;
+  } while (cursor && pages < MAX_PAGES);
+  if (cursor) console.warn(`[WFS] Orders truncated after ${MAX_PAGES} pages (${orders.length} orders)`);
   return orders;
 }
 
