@@ -69,7 +69,8 @@ export const getRouter = () => {
       queries: {
         staleTime: 5 * 60 * 1000,
         gcTime: 10 * 60 * 1000,
-        retry: 1,
+        // walmartFetch already retries internally; don't double the wait at Query level
+        retry: 0,
       },
     },
   });
