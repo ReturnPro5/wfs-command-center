@@ -11,25 +11,6 @@ interface TokenResponse {
 }
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
-let cachedBasicAuth: string | null = null;
-
-/**
- * Returns the Basic auth header value (Base64 of clientId:clientSecret).
- * Walmart requires this on every API request alongside WM_SEC.ACCESS_TOKEN.
- */
-export function getWalmartBasicAuth(): string {
-  if (cachedBasicAuth) return cachedBasicAuth;
-
-  const clientId = process.env.WALMART_CLIENT_ID;
-  const clientSecret = process.env.WALMART_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("WALMART_CLIENT_ID and WALMART_CLIENT_SECRET must be configured");
-  }
-
-  cachedBasicAuth = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-  return cachedBasicAuth;
-}
 
 export async function getWalmartAccessToken(): Promise<string> {
   const clientId = process.env.WALMART_CLIENT_ID;
