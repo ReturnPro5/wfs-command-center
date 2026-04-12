@@ -21,11 +21,13 @@ import type {
 // ─── Overview ───────────────────────────────────────────
 export const getOverview = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardOverview> => {
-    const { inventory, orders, inventoryUnavailable, inventoryError } = await loadInventoryAndOrders("dashboard overview");
+    try {
+      console.log("[WFS:getOverview] Starting...");
+      const { inventory, orders, inventoryUnavailable, inventoryError } = await loadInventoryAndOrders("dashboard overview");
 
-    if (inventoryUnavailable) {
-      throw new Error(formatInventoryError(inventoryError));
-    }
+      if (inventoryUnavailable) {
+        throw new Error(formatInventoryError(inventoryError));
+      }
 
     const salesByDay = aggregateOrdersByDay(orders);
     const salesBySku = aggregateOrdersBySku(orders);
