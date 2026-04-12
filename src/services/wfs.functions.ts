@@ -54,6 +54,10 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
       overstockCount: enriched.filter((i) => i.status === "overstock-risk").length,
       agedInventoryCount: enriched.filter((i) => i.status === "no-sales-risk").length,
     };
+    } catch (err) {
+      console.error("[WFS:getOverview] Error:", err instanceof Error ? err.message : err);
+      throw err;
+    }
   }
 );
 
