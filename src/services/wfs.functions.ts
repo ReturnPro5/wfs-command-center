@@ -21,7 +21,12 @@ import type {
 // ─── Overview ───────────────────────────────────────────
 export const getOverview = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardOverview> => {
-    const { inventory, orders } = await loadInventoryAndOrders("dashboard overview");
+    const { inventory, orders, inventoryUnavailable, inventoryError } = await loadInventoryAndOrders("dashboard overview");
+
+    if (inventoryUnavailable) {
+      const detail = inventoryError ? `: ${inventoryError}` : "";
+      throw new Error(`Inventory data is temporarily unavailable from Walmart${detail}. Retry in a few minutes.`);
+    }
 
     const salesByDay = aggregateOrdersByDay(orders);
     const salesBySku = aggregateOrdersBySku(orders);
@@ -113,7 +118,7 @@ export const getInboundShipmentsList = createServerFn({ method: "GET" }).handler
 // ─── Alerts ─────────────────────────────────────────────
 export const getAlerts = createServerFn({ method: "GET" }).handler(
   async (): Promise<Alert[]> => {
-    const { inventory, orders, inventoryUnavailable } = await loadInventoryAndOrders("alerts");
+    const { inventory, orders, inventoryUnavailable, inventoryError } = await loadInventoryAndOrders("alerts");
     const salesBySku = aggregateOrdersBySku(orders);
 
     const enriched = inventory.map((item) => {
@@ -130,8 +135,9 @@ export const getAlerts = createServerFn({ method: "GET" }).handler(
     const alerts = biz.generateAlerts(enriched, salesData);
 
     if (inventoryUnavailable) {
+      const detail = inventoryError ? ` (${inventoryError})` : "";
       return [
-        makeSystemAlert("Inventory data is temporarily unavailable from Walmart. Retry in a few minutes."),
+        makeSystemAlert(`Inventory data is temporarily unavailable from Walmart${detail}. Retry in a few minutes.`),
         ...alerts,
       ];
     }
@@ -248,6 +254,7 @@ type InventoryAndOrdersResult = {
   inventory: RawInventoryItem[];
   orders: RawOrder[];
   inventoryUnavailable: boolean;
+  inventoryError?: string;
 };
 
 async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
@@ -263,13 +270,14 @@ async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrde
     inventory: inventoryState.data,
     orders,
     inventoryUnavailable: inventoryState.unavailable,
+    inventoryError: inventoryState.error,
   };
 }
 
 function resolveInventoryResult(
   result: PromiseSettledResult<RawInventoryItem[]>,
   context: string
-): { data: RawInventoryItem[]; unavailable: boolean } {
+): { data: RawInventoryItem[]; unavailable: boolean; error?: string } {
   if (result.status === "fulfilled") {
     return { data: result.value, unavailable: false };
   }
@@ -278,7 +286,7 @@ function resolveInventoryResult(
 
   if (isRecoverableWalmartError(result.reason)) {
     console.warn(`[WFS] ${context}: inventory temporarily unavailable, using empty fallback. ${message}`);
-    return { data: [], unavailable: true };
+    return { data: [], unavailable: true, error: message };
   }
 
   throw new Error(`Failed to load ${context}: ${message}`);
