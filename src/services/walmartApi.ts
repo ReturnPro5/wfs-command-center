@@ -9,8 +9,8 @@ import { getWalmartAccessToken } from "./walmartAuth";
 const getBaseUrl = () =>
   process.env.WALMART_API_BASE_URL || "https://marketplace.walmartapis.com";
 
-const MAX_RETRIES = 3;
-const RETRY_BASE_MS = 1000;
+const MAX_RETRIES = 1;
+const RETRY_BASE_MS = 500;
 
 async function walmartFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = await getWalmartAccessToken();
@@ -30,7 +30,7 @@ async function walmartFetch<T>(path: string, options: RequestInit = {}): Promise
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         ...options,
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(10_000),
         headers: {
           "WM_SEC.ACCESS_TOKEN": token,
           // Optional: channel type for request tracking (set WALMART_CHANNEL_TYPE env var)
