@@ -79,7 +79,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
-      orders = await fetchAllOrders(daysAgo(30));
+      orders = await fetchAllOrders(daysAgo(14));
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
@@ -169,7 +169,7 @@ export const getSkuDetail = createServerFn({ method: "POST" })
 
     const [inventoryResult, ordersResult, inboundResult] = await Promise.allSettled([
       walmartApi.getInventoryForSku(sku),
-      fetchAllOrders(daysAgo(30)),
+      fetchAllOrders(daysAgo(14)),
       walmartApi.getInboundShipments(),
     ]);
 
