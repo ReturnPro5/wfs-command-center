@@ -16,6 +16,7 @@ import { Route as InboundRouteImport } from './routes/inbound'
 import { Route as AlertsRouteImport } from './routes/alerts'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SkuSkuRouteImport } from './routes/sku.$sku'
+import { Route as ApiHealthRouteImport } from './routes/api.health'
 
 const SalesRoute = SalesRouteImport.update({
   id: '/sales',
@@ -52,6 +53,11 @@ const SkuSkuRoute = SkuSkuRouteImport.update({
   path: '/sku/$sku',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -60,6 +66,7 @@ export interface FileRoutesByFullPath {
   '/inventory': typeof InventoryRoute
   '/replenishment': typeof ReplenishmentRoute
   '/sales': typeof SalesRoute
+  '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
 }
 export interface FileRoutesByTo {
@@ -69,6 +76,7 @@ export interface FileRoutesByTo {
   '/inventory': typeof InventoryRoute
   '/replenishment': typeof ReplenishmentRoute
   '/sales': typeof SalesRoute
+  '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
 }
 export interface FileRoutesById {
@@ -79,6 +87,7 @@ export interface FileRoutesById {
   '/inventory': typeof InventoryRoute
   '/replenishment': typeof ReplenishmentRoute
   '/sales': typeof SalesRoute
+  '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
 }
 export interface FileRouteTypes {
@@ -90,6 +99,7 @@ export interface FileRouteTypes {
     | '/inventory'
     | '/replenishment'
     | '/sales'
+    | '/api/health'
     | '/sku/$sku'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -99,6 +109,7 @@ export interface FileRouteTypes {
     | '/inventory'
     | '/replenishment'
     | '/sales'
+    | '/api/health'
     | '/sku/$sku'
   id:
     | '__root__'
@@ -108,6 +119,7 @@ export interface FileRouteTypes {
     | '/inventory'
     | '/replenishment'
     | '/sales'
+    | '/api/health'
     | '/sku/$sku'
   fileRoutesById: FileRoutesById
 }
@@ -118,6 +130,7 @@ export interface RootRouteChildren {
   InventoryRoute: typeof InventoryRoute
   ReplenishmentRoute: typeof ReplenishmentRoute
   SalesRoute: typeof SalesRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   SkuSkuRoute: typeof SkuSkuRoute
 }
 
@@ -172,6 +185,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SkuSkuRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -182,6 +202,7 @@ const rootRouteChildren: RootRouteChildren = {
   InventoryRoute: InventoryRoute,
   ReplenishmentRoute: ReplenishmentRoute,
   SalesRoute: SalesRoute,
+  ApiHealthRoute: ApiHealthRoute,
   SkuSkuRoute: SkuSkuRoute,
 }
 export const routeTree = rootRouteImport
