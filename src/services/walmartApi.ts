@@ -37,9 +37,9 @@ async function walmartFetch<T>(path: string, options: RequestInit = {}): Promise
           ...(channelType ? { "WM_CONSUMER.CHANNEL.TYPE": channelType } : {}),
           "WM_SVC.NAME": "Walmart Marketplace",
           "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
-          "WM_MARKET": "walmart.com",
           "Accept": "application/json",
-          "Content-Type": "application/json",
+          // Only set Content-Type for requests that have a body (POST/PUT/PATCH)
+          ...((options.method && options.method !== "GET") ? { "Content-Type": "application/json" } : {}),
           ...options.headers,
         },
       });
@@ -83,14 +83,9 @@ export async function getInventory(nextCursor?: string) {
 export async function getWfsInventory(nextCursor?: string) {
   const params = new URLSearchParams({ limit: "200" });
   if (nextCursor) params.set("nextCursor", nextCursor);
-
-  try {
-    return await walmartFetch<any>(`/v3/fulfillment/inventory?${params}`);
-  } catch (err: any) {
-    // Fallback to standard inventory endpoint if WFS endpoint fails
-    console.warn(`[WalmartAPI] WFS inventory endpoint failed, falling back to /v3/inventory: ${err.message}`);
-    return walmartFetch<any>(`/v3/inventory?${params}`);
-  }
+  // Use the WFS-specific endpoint directly — no fallback, so real errors surface.
+  // /v3/inventory requires a sku parameter and does not support bulk listing.
+  return walmartFetch<any>(`/v3/fulfillment/inventory?${params}`);
 }
 
 export async function getInventoryForSku(sku: string) {
