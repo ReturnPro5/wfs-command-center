@@ -320,6 +320,7 @@ function isRecoverableWalmartError(error: unknown): boolean {
   const status = statusMatch ? Number(statusMatch[1]) : null;
 
   return (
+    message.includes("WALMART_CLIENT_ID and WALMART_CLIENT_SECRET must be configured") ||
     maybeError?.name === "AbortError" ||
     maybeError?.name === "TimeoutError" ||
     maybeError?.cause?.code === "UND_ERR_CONNECT_TIMEOUT" ||
