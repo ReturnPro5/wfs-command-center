@@ -21,11 +21,13 @@ import type {
 // ─── Overview ───────────────────────────────────────────
 export const getOverview = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardOverview> => {
-    const { inventory, orders, inventoryUnavailable, inventoryError } = await loadInventoryAndOrders("dashboard overview");
+    try {
+      console.log("[WFS:getOverview] Starting...");
+      const { inventory, orders, inventoryUnavailable, inventoryError } = await loadInventoryAndOrders("dashboard overview");
 
-    if (inventoryUnavailable) {
-      throw new Error(formatInventoryError(inventoryError));
-    }
+      if (inventoryUnavailable) {
+        throw new Error(formatInventoryError(inventoryError));
+      }
 
     const salesByDay = aggregateOrdersByDay(orders);
     const salesBySku = aggregateOrdersBySku(orders);
@@ -52,6 +54,10 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
       overstockCount: enriched.filter((i) => i.status === "overstock-risk").length,
       agedInventoryCount: enriched.filter((i) => i.status === "no-sales-risk").length,
     };
+    } catch (err) {
+      console.error("[WFS:getOverview] Error:", err instanceof Error ? err.message : err);
+      throw err;
+    }
   }
 );
 
