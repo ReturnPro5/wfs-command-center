@@ -24,8 +24,7 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
     const { inventory, orders, inventoryUnavailable, inventoryError } = await loadInventoryAndOrders("dashboard overview");
 
     if (inventoryUnavailable) {
-      const detail = inventoryError ? `: ${inventoryError}` : "";
-      throw new Error(`Inventory data is temporarily unavailable from Walmart${detail}. Retry in a few minutes.`);
+      throw new Error(formatInventoryError(inventoryError));
     }
 
     const salesByDay = aggregateOrdersByDay(orders);
@@ -135,9 +134,8 @@ export const getAlerts = createServerFn({ method: "GET" }).handler(
     const alerts = biz.generateAlerts(enriched, salesData);
 
     if (inventoryUnavailable) {
-      const detail = inventoryError ? ` (${inventoryError})` : "";
       return [
-        makeSystemAlert(`Inventory data is temporarily unavailable from Walmart${detail}. Retry in a few minutes.`),
+        makeSystemAlert(formatInventoryError(inventoryError)),
         ...alerts,
       ];
     }
@@ -326,6 +324,39 @@ function isRecoverableWalmartError(error: unknown): boolean {
     (status !== null && status >= 500) ||
     message.includes("SYSTEM_ERROR.GMP_GATEWAY_API")
   );
+}
+
+function formatInventoryError(inventoryError?: string): string {
+  if (!inventoryError) {
+    return "Inventory data is temporarily unavailable from Walmart. Retry in a few minutes.";
+  }
+
+  // SYSTEM_ERROR.GMP_GATEWAY_API: Walmart's backend had an internal error — usually
+  // caused by missing API key permissions or account not enrolled in WFS.
+  if (inventoryError.includes("SYSTEM_ERROR.GMP_GATEWAY_API")) {
+    return (
+      "Walmart API error: SYSTEM_ERROR.GMP_GATEWAY_API. " +
+      "Check that your API key has 'View Inventory' permission enabled in " +
+      "Seller Center → Settings → Developer Settings, and that this account " +
+      "is enrolled in Walmart Fulfillment Services (WFS)."
+    );
+  }
+
+  // 401 / 403: auth or permissions issue
+  if (inventoryError.includes("[401]") || inventoryError.includes("[403]")) {
+    return (
+      `Walmart API authentication error (${inventoryError.match(/\[\d+\]/)?.[0] ?? "auth"}). ` +
+      "Verify WALMART_CLIENT_ID and WALMART_CLIENT_SECRET are correct and that the " +
+      "API key has inventory read permissions."
+    );
+  }
+
+  // 429: rate limited
+  if (inventoryError.includes("[429]")) {
+    return "Walmart API rate limit reached. Data will refresh automatically in a few minutes.";
+  }
+
+  return `Inventory data is temporarily unavailable from Walmart (${inventoryError}). Retry in a few minutes.`;
 }
 
 function makeSystemAlert(message: string): Alert {
