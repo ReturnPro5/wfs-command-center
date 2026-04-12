@@ -280,7 +280,7 @@ type InventoryAndOrdersResult = {
 async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
   const [inventoryResult, ordersResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(daysAgo(30)),
+    fetchAllOrders(daysAgo(14)),
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
