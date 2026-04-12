@@ -79,7 +79,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
-      orders = await fetchAllOrders(daysAgo(30));
+      orders = await fetchAllOrders(daysAgo(14));
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
@@ -169,7 +169,7 @@ export const getSkuDetail = createServerFn({ method: "POST" })
 
     const [inventoryResult, ordersResult, inboundResult] = await Promise.allSettled([
       walmartApi.getInventoryForSku(sku),
-      fetchAllOrders(daysAgo(30)),
+      fetchAllOrders(daysAgo(14)),
       walmartApi.getInboundShipments(),
     ]);
 
@@ -222,26 +222,33 @@ type RawInventoryItem = {
   lastUpdated: string;
 };
 
+const MAX_PAGES = 3; // Limit pagination to avoid Worker timeouts (Cloudflare has ~30s limit)
+
 async function fetchAllInventory(): Promise<RawInventoryItem[]> {
   const items: RawInventoryItem[] = [];
   let cursor: string | undefined;
+  let pages = 0;
   do {
     const page = await walmartApi.getWfsInventory(cursor);
     items.push(...parseInventoryResponse(page));
     cursor = page?.nextCursor;
-  } while (cursor);
+    pages++;
+  } while (cursor && pages < MAX_PAGES);
+  if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES} pages (${items.length} items)`);
   return items;
 }
 
 async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
   const orders: RawOrder[] = [];
   let cursor: string | undefined;
+  let pages = 0;
   do {
     const page = await walmartApi.getOrders({ createdStartDate: startDate, nextCursor: cursor });
     orders.push(...parseOrdersResponse(page));
-    // Walmart orders API surfaces nextCursor in either location
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
-  } while (cursor);
+    pages++;
+  } while (cursor && pages < MAX_PAGES);
+  if (cursor) console.warn(`[WFS] Orders truncated after ${MAX_PAGES} pages (${orders.length} orders)`);
   return orders;
 }
 
@@ -273,7 +280,7 @@ type InventoryAndOrdersResult = {
 async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
   const [inventoryResult, ordersResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(daysAgo(30)),
+    fetchAllOrders(daysAgo(14)),
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);

@@ -31,12 +31,14 @@ function OverviewPage() {
     queryKey: ["overview"],
     queryFn: () => getOverview(),
     retry: 1,
+    staleTime: 5 * 60 * 1000, // 5 min — avoid refetch on HMR / re-render
   });
 
   const alerts = useQuery<Alert[]>({
     queryKey: ["alerts-summary"],
     queryFn: () => getAlerts(),
     retry: 1,
+    staleTime: 5 * 60 * 1000,
   });
 
   return (
