@@ -229,21 +229,22 @@ async function fetchAllInventory(): Promise<RawInventoryItem[]> {
   let cursor: string | undefined;
   let pages = 0;
   do {
-    const page = await walmartApi.getWfsInventory(cursor);
+    const raw = await walmartApi.getWfsInventory(cursor);
+    // Walmart wraps responses in { status, headers, payload } — unwrap if present
+    const page = (raw as any)?.payload ?? raw;
 
-    // Debug first page so we can see the actual WFS API response structure
     if (pages === 0) {
-      const keys = Object.keys(page ?? {});
-      const invIsArray = Array.isArray((page as any)?.inventory);
-      const sample = invIsArray
-        ? (page as any).inventory[0]
-        : ((page as any)?.inventory?.elements ?? (page as any)?.elements ?? [])[0];
-      console.log("[WFS] inventory page 0 keys:", keys.join(", "));
+      const keys = Object.keys(raw ?? {});
+      const payloadKeys = (raw as any)?.payload ? Object.keys((raw as any).payload) : [];
+      const invVal = (page as any)?.inventory;
+      const invIsArray = Array.isArray(invVal);
+      const sample = invIsArray ? invVal[0] : (invVal?.elements ?? page?.elements ?? [])[0];
+      console.log("[WFS] inventory raw keys:", keys.join(", "), "| payload keys:", payloadKeys.join(", "));
       console.log("[WFS] inventory is array:", invIsArray, "| sample item keys:", Object.keys(sample ?? {}).join(", "));
     }
 
     items.push(...parseInventoryResponse(page));
-    cursor = page?.nextCursor;
+    cursor = (page as any)?.nextCursor;
     pages++;
   } while (cursor && pages < MAX_PAGES);
   if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES} pages (${items.length} items)`);
@@ -255,13 +256,18 @@ async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
   let cursor: string | undefined;
   let pages = 0;
   do {
-    const page = await walmartApi.getOrders({ createdStartDate: startDate, nextCursor: cursor });
+    const raw = await walmartApi.getOrders({ createdStartDate: startDate, nextCursor: cursor });
+    // Walmart wraps responses in { status, headers, payload } — unwrap if present
+    const page = (raw as any)?.payload ?? raw;
 
     if (pages === 0) {
+      const rawKeys = Object.keys(raw ?? {});
+      const payloadKeys = (raw as any)?.payload ? Object.keys((raw as any).payload) : [];
       const meta = page?.list?.meta;
       const rawOrderList = page?.list?.elements?.order ?? page?.orders ?? page?.elements ?? [];
       const sampleOrder = rawOrderList[0];
-      console.log("[WFS] orders page 0 — totalCount:", meta?.totalCount, "| returned:", rawOrderList.length, "| top-level keys:", Object.keys(page ?? {}).join(", "));
+      console.log("[WFS] orders raw keys:", rawKeys.join(", "), "| payload keys:", payloadKeys.join(", "));
+      console.log("[WFS] orders page 0 — totalCount:", meta?.totalCount, "| returned:", rawOrderList.length);
       if (sampleOrder) {
         const sampleLine = sampleOrder.orderLines?.orderLine?.[0];
         const sampleStatuses = sampleLine?.orderLineStatuses?.orderLineStatus ?? [];
@@ -275,7 +281,7 @@ async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
     pages++;
   } while (cursor && pages < MAX_PAGES);
-  console.log(`[WFS] fetchAllOrders done — pages: ${pages}, parsed line items: ${orders.length}, total units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
+  console.log(`[WFS] fetchAllOrders done — pages: ${pages}, line items: ${orders.length}, total units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
   if (cursor) console.warn(`[WFS] Orders truncated after ${MAX_PAGES} pages (${orders.length} orders)`);
   return orders;
 }
