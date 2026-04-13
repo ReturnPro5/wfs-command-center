@@ -79,7 +79,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
-      orders = await fetchAllOrders(daysAgo(14));
+      orders = await fetchAllOrders(daysAgo(30));
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
@@ -169,7 +169,7 @@ export const getSkuDetail = createServerFn({ method: "POST" })
 
     const [inventoryResult, ordersResult, inboundResult] = await Promise.allSettled([
       walmartApi.getInventoryForSku(sku),
-      fetchAllOrders(daysAgo(14)),
+      fetchAllOrders(daysAgo(30)),
       walmartApi.getInboundShipments(),
     ]);
 
@@ -292,7 +292,7 @@ type InventoryAndOrdersResult = {
 async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
   const [inventoryResult, ordersResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(daysAgo(14)),
+    fetchAllOrders(daysAgo(30)),
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
@@ -497,22 +497,21 @@ function parseOrdersResponse(data: any): RawOrder[] {
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
     for (const line of lines) {
-      // Use shipped/delivered statusQuantity to match Seller Center "units sold" reporting.
-      // orderLineQuantity.amount is the total ORDERED qty and includes cancelled units.
+      const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
+      if (orderedQty <= 0 || isNaN(orderedQty)) continue;
+
+      // Subtract only explicitly cancelled quantities.
+      // Seller Center "units sold" = all non-cancelled orders
+      // (includes Created, Acknowledged, Shipped, Delivered — excludes Cancelled only).
+      // We can't use shipped-status-only because WFS orders sit in Acknowledged
+      // for 1-2 days before shipping, and Seller Center counts them immediately.
       const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
+      const cancelledQty = statuses
+        .filter((s: any) => s.status === "Cancelled")
+        .reduce((sum: number, s: any) => sum + Number(s.statusQuantity?.amount ?? 0), 0);
 
-      let qty: number;
-      if (statuses.length > 0) {
-        // Sum only Shipped + Delivered quantities; skip cancelled/returned lines (qty === 0)
-        qty = statuses
-          .filter((s: any) => s.status === "Shipped" || s.status === "Delivered")
-          .reduce((sum: number, s: any) => sum + Number(s.statusQuantity?.amount ?? 0), 0);
-      } else {
-        // No status info yet (order just created) — fall back to ordered qty
-        qty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
-      }
-
-      if (qty === 0) continue; // fully cancelled / returned line
+      const qty = orderedQty - cancelledQty;
+      if (qty <= 0) continue;
 
       result.push({
         sku: line.item?.sku ?? line.sku ?? "",
