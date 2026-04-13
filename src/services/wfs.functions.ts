@@ -256,10 +256,26 @@ async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
   let pages = 0;
   do {
     const page = await walmartApi.getOrders({ createdStartDate: startDate, nextCursor: cursor });
+
+    if (pages === 0) {
+      const meta = page?.list?.meta;
+      const rawOrderList = page?.list?.elements?.order ?? page?.orders ?? page?.elements ?? [];
+      const sampleOrder = rawOrderList[0];
+      console.log("[WFS] orders page 0 — totalCount:", meta?.totalCount, "| returned:", rawOrderList.length, "| top-level keys:", Object.keys(page ?? {}).join(", "));
+      if (sampleOrder) {
+        const sampleLine = sampleOrder.orderLines?.orderLine?.[0];
+        const sampleStatuses = sampleLine?.orderLineStatuses?.orderLineStatus ?? [];
+        console.log("[WFS] sample order keys:", Object.keys(sampleOrder).join(", "));
+        console.log("[WFS] sample line orderLineQuantity:", JSON.stringify(sampleLine?.orderLineQuantity));
+        console.log("[WFS] sample line statuses:", JSON.stringify(sampleStatuses));
+      }
+    }
+
     orders.push(...parseOrdersResponse(page));
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
     pages++;
   } while (cursor && pages < MAX_PAGES);
+  console.log(`[WFS] fetchAllOrders done — pages: ${pages}, parsed line items: ${orders.length}, total units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
   if (cursor) console.warn(`[WFS] Orders truncated after ${MAX_PAGES} pages (${orders.length} orders)`);
   return orders;
 }
