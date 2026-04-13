@@ -465,21 +465,28 @@ function normalizeOrderDate(rawDate: unknown): string {
 }
 
 function parseInventoryResponse(data: any): RawInventoryItem[] {
-  // WFS endpoint:   { inventory: [...], nextCursor: "..." }  — inventory is a direct array
-  // Legacy format:  { inventory: { elements: [...] } }       — inventory is an object
-  // Fallback:       { elements: [...] } or { items: [...] }
+  // Walmart WFS inventory response formats (after payload unwrap):
+  //   { inventory: [...], nextCursor }            — direct array (common)
+  //   { inventory: { elements: [...] } }           — nested elements
+  //   { invDetails: { inventoryDetails: [...] } }  — alternate WFS format
+  //   { elements: [...] }  |  { items: [...] }     — fallback
   const items: any[] =
     (Array.isArray(data?.inventory) ? data.inventory : null) ??
     data?.inventory?.elements ??
+    data?.invDetails?.inventoryDetails ??
     data?.elements ??
     data?.items ??
     [];
+
+  if (items.length > 0) {
+    const sample = items[0];
+    console.log("[WFS] parseInventoryResponse — found", items.length, "items | sample keys:", Object.keys(sample).join(", "), "| fulfillmentType:", sample.fulfillmentType ?? sample.fulfillmentOption ?? "n/a");
+  }
 
   return items
     .map((item: any) => ({
       sku: item.sku ?? item.SKU ?? "",
       productName: item.productName ?? item.product_name ?? item.sku ?? "",
-      // WFS uses onHandQuantity / availableToSellQuantity / reservedQuantity / inTransitQuantity
       onHand:
         item.onHandQuantity?.amount ??
         item.quantity?.amount ??
