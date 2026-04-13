@@ -230,6 +230,18 @@ async function fetchAllInventory(): Promise<RawInventoryItem[]> {
   let pages = 0;
   do {
     const page = await walmartApi.getWfsInventory(cursor);
+
+    // Debug first page so we can see the actual WFS API response structure
+    if (pages === 0) {
+      const keys = Object.keys(page ?? {});
+      const invIsArray = Array.isArray((page as any)?.inventory);
+      const sample = invIsArray
+        ? (page as any).inventory[0]
+        : ((page as any)?.inventory?.elements ?? (page as any)?.elements ?? [])[0];
+      console.log("[WFS] inventory page 0 keys:", keys.join(", "));
+      console.log("[WFS] inventory is array:", invIsArray, "| sample item keys:", Object.keys(sample ?? {}).join(", "));
+    }
+
     items.push(...parseInventoryResponse(page));
     cursor = page?.nextCursor;
     pages++;
@@ -431,15 +443,45 @@ function normalizeOrderDate(rawDate: unknown): string {
 }
 
 function parseInventoryResponse(data: any): RawInventoryItem[] {
-  const items = data?.inventory?.elements ?? data?.elements ?? data?.items ?? [];
+  // WFS endpoint:   { inventory: [...], nextCursor: "..." }  — inventory is a direct array
+  // Legacy format:  { inventory: { elements: [...] } }       — inventory is an object
+  // Fallback:       { elements: [...] } or { items: [...] }
+  const items: any[] =
+    (Array.isArray(data?.inventory) ? data.inventory : null) ??
+    data?.inventory?.elements ??
+    data?.elements ??
+    data?.items ??
+    [];
+
   return items
     .map((item: any) => ({
       sku: item.sku ?? item.SKU ?? "",
       productName: item.productName ?? item.product_name ?? item.sku ?? "",
-      onHand: item.quantity?.amount ?? item.onHand ?? item.qty ?? 0,
-      availableToSell: item.availableToSellQty ?? item.available ?? item.quantity?.amount ?? 0,
-      reserved: item.reservedQty ?? item.reserved ?? 0,
-      inbound: item.inboundQty ?? item.inbound ?? 0,
+      // WFS uses onHandQuantity / availableToSellQuantity / reservedQuantity / inTransitQuantity
+      onHand:
+        item.onHandQuantity?.amount ??
+        item.quantity?.amount ??
+        item.onHand ??
+        item.onHandQty ??
+        item.qty ??
+        0,
+      availableToSell:
+        item.availableToSellQuantity?.amount ??
+        item.availableToSellQty ??
+        item.available ??
+        item.quantity?.amount ??
+        0,
+      reserved:
+        item.reservedQuantity?.amount ??
+        item.reservedQty ??
+        item.reserved ??
+        0,
+      inbound:
+        item.inTransitQuantity?.amount ??
+        item.inboundQuantity?.amount ??
+        item.inboundQty ??
+        item.inbound ??
+        0,
       lastUpdated: item.lastUpdatedTs ?? item.lastUpdated ?? new Date().toISOString(),
     }))
     .filter((item: RawInventoryItem) => item.sku !== "");
