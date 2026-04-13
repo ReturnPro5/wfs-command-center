@@ -455,13 +455,29 @@ function parseOrdersResponse(data: any): RawOrder[] {
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
     for (const line of lines) {
+      // Use shipped/delivered statusQuantity to match Seller Center "units sold" reporting.
+      // orderLineQuantity.amount is the total ORDERED qty and includes cancelled units.
+      const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
+
+      let qty: number;
+      if (statuses.length > 0) {
+        // Sum only Shipped + Delivered quantities; skip cancelled/returned lines (qty === 0)
+        qty = statuses
+          .filter((s: any) => s.status === "Shipped" || s.status === "Delivered")
+          .reduce((sum: number, s: any) => sum + Number(s.statusQuantity?.amount ?? 0), 0);
+      } else {
+        // No status info yet (order just created) — fall back to ordered qty
+        qty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
+      }
+
+      if (qty === 0) continue; // fully cancelled / returned line
+
       result.push({
         sku: line.item?.sku ?? line.sku ?? "",
         productName: line.item?.productName ?? line.productName ?? "",
-        qty: Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1),
+        qty,
         revenue:
-          Number(line.charges?.charge?.[0]?.chargeAmount?.amount ?? line.price ?? 0) *
-          Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1),
+          Number(line.charges?.charge?.[0]?.chargeAmount?.amount ?? line.price ?? 0) * qty,
         date: normalizedOrderDate,
       });
     }
