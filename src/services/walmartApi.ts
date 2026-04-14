@@ -81,7 +81,7 @@ export async function getInventory(nextCursor?: string) {
 }
 
 export async function getWfsInventory(nextCursor?: string) {
-  const params = new URLSearchParams({ limit: "200" });
+  const params = new URLSearchParams({ limit: "500" });
   if (nextCursor) params.set("nextCursor", nextCursor);
   // Use the WFS-specific endpoint directly — no fallback, so real errors surface.
   // /v3/inventory requires a sku parameter and does not support bulk listing.

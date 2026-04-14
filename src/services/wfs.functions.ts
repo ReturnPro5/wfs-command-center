@@ -236,17 +236,25 @@ async function fetchAllInventory(): Promise<RawInventoryItem[]> {
     if (pages === 0) {
       const keys = Object.keys(raw ?? {});
       const payloadKeys = (raw as any)?.payload ? Object.keys((raw as any).payload) : [];
+      const rawHeaders = (raw as any)?.headers ?? {};
       const invVal = (page as any)?.inventory;
       const invIsArray = Array.isArray(invVal);
       const sample = invIsArray ? invVal[0] : (invVal?.elements ?? page?.elements ?? [])[0];
+      const sampleNode = (sample?.shipNodes ?? [])[0];
       console.log("[WFS] inventory raw keys:", keys.join(", "), "| payload keys:", payloadKeys.join(", "));
-      console.log("[WFS] inventory is array:", invIsArray, "| sample item keys:", Object.keys(sample ?? {}).join(", "));
+      console.log("[WFS] inventory headers:", JSON.stringify(rawHeaders));
+      console.log("[WFS] inventory is array:", invIsArray, "| count:", invIsArray ? invVal.length : 0, "| sample item keys:", Object.keys(sample ?? {}).join(", "));
+      if (sampleNode) {
+        console.log("[WFS] sample shipNode:", JSON.stringify(sampleNode));
+      }
     }
 
     items.push(...parseInventoryResponse(page));
-    cursor = (page as any)?.nextCursor;
+    // Cursor may be in payload body or in the response headers envelope
+    cursor = (page as any)?.nextCursor ?? (raw as any)?.headers?.nextCursor ?? (raw as any)?.headers?.["WM_NEXT_CURSOR"];
     pages++;
   } while (cursor && pages < MAX_PAGES);
+  console.log(`[WFS] fetchAllInventory done — pages: ${pages}, items: ${items.length}`);
   if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES} pages (${items.length} items)`);
   return items;
 }
@@ -478,41 +486,58 @@ function parseInventoryResponse(data: any): RawInventoryItem[] {
     data?.items ??
     [];
 
-  if (items.length > 0) {
-    const sample = items[0];
-    console.log("[WFS] parseInventoryResponse — found", items.length, "items | sample keys:", Object.keys(sample).join(", "), "| fulfillmentType:", sample.fulfillmentType ?? sample.fulfillmentOption ?? "n/a");
-  }
-
   return items
-    .map((item: any) => ({
-      sku: item.sku ?? item.SKU ?? "",
-      productName: item.productName ?? item.product_name ?? item.sku ?? "",
-      onHand:
-        item.onHandQuantity?.amount ??
-        item.quantity?.amount ??
-        item.onHand ??
-        item.onHandQty ??
-        item.qty ??
-        0,
-      availableToSell:
-        item.availableToSellQuantity?.amount ??
-        item.availableToSellQty ??
-        item.available ??
-        item.quantity?.amount ??
-        0,
-      reserved:
-        item.reservedQuantity?.amount ??
-        item.reservedQty ??
-        item.reserved ??
-        0,
-      inbound:
-        item.inTransitQuantity?.amount ??
-        item.inboundQuantity?.amount ??
-        item.inboundQty ??
-        item.inbound ??
-        0,
-      lastUpdated: item.lastUpdatedTs ?? item.lastUpdated ?? new Date().toISOString(),
-    }))
+    .map((item: any) => {
+      // /v3/fulfillment/inventory returns quantities nested inside shipNodes[]:
+      //   { sku, offerId, shipNodes: [{ shipNodeId, type, onHandQty, availableToSellQty, ... }] }
+      // We sum across all WFS nodes (usually just one) and fall back to top-level fields
+      // for older/alternate response formats.
+      const shipNodes: any[] = item.shipNodes ?? [];
+      const wfsNodes = shipNodes.filter(
+        (n: any) =>
+          !n.type || // include if type absent (treat as WFS)
+          n.type === "WFS" ||
+          n.type === "FC" ||
+          String(n.shipNodeId ?? "").toUpperCase().includes("WFS")
+      );
+      const nodes = wfsNodes.length > 0 ? wfsNodes : shipNodes;
+
+      const sumNode = (field: string) =>
+        nodes.reduce((sum: number, n: any) => {
+          const val = n[field];
+          return sum + Number(typeof val === "object" ? (val?.amount ?? val?.value ?? 0) : (val ?? 0));
+        }, 0);
+
+      const onHand =
+        nodes.length > 0
+          ? sumNode("onHandQty")
+          : Number(item.onHandQuantity?.amount ?? item.quantity?.amount ?? item.onHand ?? item.onHandQty ?? item.qty ?? 0);
+
+      const availableToSell =
+        nodes.length > 0
+          ? sumNode("availableToSellQty")
+          : Number(item.availableToSellQuantity?.amount ?? item.availableToSellQty ?? item.available ?? 0);
+
+      const reserved =
+        nodes.length > 0
+          ? sumNode("reservedQty")
+          : Number(item.reservedQuantity?.amount ?? item.reservedQty ?? item.reserved ?? 0);
+
+      const inbound =
+        nodes.length > 0
+          ? sumNode("inTransitQty")
+          : Number(item.inTransitQuantity?.amount ?? item.inboundQuantity?.amount ?? item.inboundQty ?? item.inbound ?? 0);
+
+      return {
+        sku: item.sku ?? item.SKU ?? "",
+        productName: item.productName ?? item.product_name ?? item.sku ?? "",
+        onHand,
+        availableToSell,
+        reserved,
+        inbound,
+        lastUpdated: item.lastUpdatedTs ?? item.lastUpdated ?? new Date().toISOString(),
+      };
+    })
     .filter((item: RawInventoryItem) => item.sku !== "");
 }
 
