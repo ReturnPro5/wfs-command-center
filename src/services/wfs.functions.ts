@@ -44,6 +44,10 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
 
     return {
       totalWfsInventory: enriched.reduce((sum, i) => sum + i.onHand, 0),
+      // wfsCatalogSkuCount = total SKUs enrolled in WFS (all items from /v3/fulfillment/inventory)
+      wfsCatalogSkuCount: inventory.length,
+      // activeSkuCount = SKUs with at least 1 unit on-hand at WFS
+      activeSkuCount: enriched.filter((i) => i.onHand > 0).length,
       salesYesterday: salesByDay.get(yesterdayStr) ?? 0,
       salesLast7Days: computeSalesRange(salesByDay, 7),
       salesMTD: computeSalesMTD(salesByDay),
