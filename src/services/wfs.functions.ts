@@ -84,7 +84,18 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
-      orders = await fetchAllOrders(startOfYear());
+      const w2End = daysAgo(30);
+      const w1End = daysAgo(90);
+      const [r, m, e] = await Promise.allSettled([
+        fetchAllOrders(w2End, 12),
+        fetchAllOrders(w1End, 8, w2End),
+        fetchAllOrders(startOfYear(), 6, w1End),
+      ]);
+      orders = [
+        ...(r.status === "fulfilled" ? r.value : []),
+        ...(m.status === "fulfilled" ? m.value : []),
+        ...(e.status === "fulfilled" ? e.value : []),
+      ];
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
@@ -228,7 +239,6 @@ type RawInventoryItem = {
 };
 
 const MAX_PAGES_INVENTORY = 3;
-const MAX_PAGES_ORDERS = 10; // up to 2000 orders; covers YTD for most sellers
 
 async function fetchAllInventory(): Promise<RawInventoryItem[]> {
   const items: RawInventoryItem[] = [];
@@ -265,39 +275,37 @@ async function fetchAllInventory(): Promise<RawInventoryItem[]> {
   return items;
 }
 
-async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
+// Fetch a bounded window of orders (start to optional end), up to maxPages pages.
+// Walmart returns newest-first within each window, so narrower windows = better coverage.
+async function fetchAllOrders(
+  startDate: string,
+  maxPages = 12,
+  endDate?: string
+): Promise<RawOrder[]> {
+  // Skip impossible windows
+  if (endDate && new Date(endDate) <= new Date(startDate)) return [];
+
   const orders: RawOrder[] = [];
   let cursor: string | undefined;
   let pages = 0;
   do {
-    const raw = await walmartApi.getOrders({ createdStartDate: startDate, nextCursor: cursor });
-    // Walmart wraps responses in { status, headers, payload } — unwrap if present
+    const raw = await walmartApi.getOrders({
+      createdStartDate: startDate,
+      ...(endDate ? { createdEndDate: endDate } : {}),
+      nextCursor: cursor,
+    });
     const page = (raw as any)?.payload ?? raw;
-
-    if (pages === 0) {
-      const rawKeys = Object.keys(raw ?? {});
-      const payloadKeys = (raw as any)?.payload ? Object.keys((raw as any).payload) : [];
-      const meta = page?.list?.meta;
-      const rawOrderList = page?.list?.elements?.order ?? page?.orders ?? page?.elements ?? [];
-      const sampleOrder = rawOrderList[0];
-      console.log("[WFS] orders raw keys:", rawKeys.join(", "), "| payload keys:", payloadKeys.join(", "));
-      console.log("[WFS] orders page 0 — totalCount:", meta?.totalCount, "| returned:", rawOrderList.length);
-      if (sampleOrder) {
-        const sampleLine = sampleOrder.orderLines?.orderLine?.[0];
-        const sampleStatuses = sampleLine?.orderLineStatuses?.orderLineStatus ?? [];
-        console.log("[WFS] sample order keys:", Object.keys(sampleOrder).join(", "));
-        console.log("[WFS] sample orderDate value:", JSON.stringify(sampleOrder.orderDate));
-        console.log("[WFS] sample line orderLineQuantity:", JSON.stringify(sampleLine?.orderLineQuantity));
-        console.log("[WFS] sample line statuses:", JSON.stringify(sampleStatuses));
-      }
-    }
 
     orders.push(...parseOrdersResponse(page));
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
     pages++;
-  } while (cursor && pages < MAX_PAGES_ORDERS);
-  console.log(`[WFS] fetchAllOrders done — pages: ${pages}, line items: ${orders.length}, total units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
-  if (cursor) console.warn(`[WFS] Orders truncated after ${MAX_PAGES_ORDERS} pages (${orders.length} orders)`);
+  } while (cursor && pages < maxPages);
+
+  const label = endDate
+    ? `${startDate.slice(0, 10)}→${endDate.slice(0, 10)}`
+    : `${startDate.slice(0, 10)}→now`;
+  console.log(`[WFS] orders window [${label}] — pages: ${pages}, line items: ${orders.length}, units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
+  if (cursor) console.warn(`[WFS] Orders window [${label}] truncated after ${maxPages} pages`);
   return orders;
 }
 
@@ -331,13 +339,30 @@ type InventoryAndOrdersResult = {
 };
 
 async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
-  const [inventoryResult, ordersResult] = await Promise.allSettled([
+  // Split YTD into 3 non-overlapping windows fetched in parallel.
+  // Walmart returns newest-first within each window; bounded windows give better
+  // coverage than one large unbounded window at the same total page budget.
+  //   recent: last 30 days  → accurate 7d / 30d / MTD / yesterday
+  //   mid:    30–90 days ago → extends coverage back ~2 months
+  //   early:  Jan 1 to 90 days ago → completes YTD (skipped if year started <90 days ago)
+  const w2End = daysAgo(30);
+  const w1End = daysAgo(90);
+
+  const [inventoryResult, recentResult, midResult, earlyResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(startOfYear()),
+    fetchAllOrders(w2End, 12),               // last 30 days (12 pages ≈ 2400 orders)
+    fetchAllOrders(w1End, 8, w2End),         // 30–90 days ago (8 pages ≈ 1600 orders)
+    fetchAllOrders(startOfYear(), 6, w1End), // Jan 1 → 90 days ago (6 pages ≈ 1200 orders; empty if year started within 90 days)
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
-  const orders = resolveOrdersResult(ordersResult, context);
+  const orders = [
+    ...resolveOrdersResult(recentResult, context),
+    ...resolveOrdersResult(midResult, context),
+    ...resolveOrdersResult(earlyResult, context),
+  ];
+
+  console.log(`[WFS] loadInventoryAndOrders [${context}] total orders combined: ${orders.length}`);
 
   return {
     inventory: inventoryState.data,
