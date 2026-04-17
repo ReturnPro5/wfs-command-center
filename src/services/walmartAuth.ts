@@ -12,12 +12,16 @@ interface TokenResponse {
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
+// Singleton promise: when multiple parallel callers need a token at the same time,
+// they all await this one promise instead of each racing to call /v3/token.
+// Concurrent bursts (from parallel order-window fetches) previously caused Walmart
+// to reject the flood of simultaneous auth requests with a misleading header error.
+let pendingTokenRequest: Promise<string> | null = null;
+
 export async function getWalmartAccessToken(): Promise<string> {
   const clientId = process.env.WALMART_CLIENT_ID;
   const clientSecret = process.env.WALMART_CLIENT_SECRET;
   const baseUrl = process.env.WALMART_API_BASE_URL || "https://marketplace.walmartapis.com";
-
-  console.log("[WalmartAuth] ENV check — CLIENT_ID:", clientId ? "set" : "MISSING", "CLIENT_SECRET:", clientSecret ? "set" : "MISSING", "BASE_URL:", baseUrl);
 
   if (!clientId || !clientSecret) {
     throw new Error("WALMART_CLIENT_ID and WALMART_CLIENT_SECRET must be configured");
@@ -28,37 +32,46 @@ export async function getWalmartAccessToken(): Promise<string> {
     return cachedToken.token;
   }
 
-  // Use btoa() (Web standard) to avoid any Node.js Buffer compatibility issues in CF Workers
-  const credentials = btoa(`${clientId}:${clientSecret}`);
-
-  const correlationId = crypto.randomUUID();
-  console.log("[WalmartAuth] Requesting new token, correlationId:", correlationId);
-
-  const response = await fetch(`${baseUrl}/v3/token`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Basic ${credentials}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Accept": "application/json",
-      "WM_SVC.NAME": "Walmart Marketplace",
-      "WM_QOS.CORRELATION_ID": correlationId,
-    },
-    body: "grant_type=client_credentials",
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    console.error("[WalmartAuth] Token request failed:", response.status, text);
-    throw new Error(`Walmart auth failed [${response.status}]: ${text}`);
+  // If a token request is already in-flight, join it instead of firing another
+  if (pendingTokenRequest) {
+    return pendingTokenRequest;
   }
 
-  const data: TokenResponse = await response.json();
-  console.log("[WalmartAuth] Token acquired, expires_in:", data.expires_in);
+  pendingTokenRequest = (async () => {
+    const credentials = btoa(`${clientId}:${clientSecret}`);
+    const correlationId = crypto.randomUUID();
+    console.log("[WalmartAuth] Requesting new token, correlationId:", correlationId);
 
-  cachedToken = {
-    token: data.access_token,
-    expiresAt: Date.now() + data.expires_in * 1000,
-  };
+    const response = await fetch(`${baseUrl}/v3/token`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "WM_SVC.NAME": "Walmart Marketplace",
+        "WM_QOS.CORRELATION_ID": correlationId,
+      },
+      body: "grant_type=client_credentials",
+    });
 
-  return cachedToken.token;
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("[WalmartAuth] Token request failed:", response.status, text);
+      throw new Error(`Walmart auth failed [${response.status}]: ${text}`);
+    }
+
+    const data: TokenResponse = await response.json();
+    console.log("[WalmartAuth] Token acquired, expires_in:", data.expires_in);
+
+    cachedToken = {
+      token: data.access_token,
+      expiresAt: Date.now() + data.expires_in * 1000,
+    };
+
+    return cachedToken.token;
+  })().finally(() => {
+    pendingTokenRequest = null;
+  });
+
+  return pendingTokenRequest;
 }
