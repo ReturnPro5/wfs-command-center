@@ -526,7 +526,7 @@ function parseInventoryResponse(data: any): RawInventoryItem[] {
 
       const availableToSell =
         nodes.length > 0
-          ? sumNode("availableToSellQty")
+          ? sumNode("availToSellQty")
           : Number(item.availableToSellQuantity?.amount ?? item.availableToSellQty ?? item.available ?? 0);
 
       const reserved =
