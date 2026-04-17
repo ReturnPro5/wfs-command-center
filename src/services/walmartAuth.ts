@@ -28,7 +28,11 @@ export async function getWalmartAccessToken(): Promise<string> {
     return cachedToken.token;
   }
 
-  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  // Use btoa() (Web standard) to avoid any Node.js Buffer compatibility issues in CF Workers
+  const credentials = btoa(`${clientId}:${clientSecret}`);
+
+  const correlationId = crypto.randomUUID();
+  console.log("[WalmartAuth] Requesting new token, correlationId:", correlationId);
 
   const response = await fetch(`${baseUrl}/v3/token`, {
     method: "POST",
@@ -36,17 +40,20 @@ export async function getWalmartAccessToken(): Promise<string> {
       "Authorization": `Basic ${credentials}`,
       "Content-Type": "application/x-www-form-urlencoded",
       "Accept": "application/json",
-      "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
+      "WM_SVC.NAME": "Walmart Marketplace",
+      "WM_QOS.CORRELATION_ID": correlationId,
     },
     body: "grant_type=client_credentials",
   });
 
   if (!response.ok) {
     const text = await response.text();
+    console.error("[WalmartAuth] Token request failed:", response.status, text);
     throw new Error(`Walmart auth failed [${response.status}]: ${text}`);
   }
 
   const data: TokenResponse = await response.json();
+  console.log("[WalmartAuth] Token acquired, expires_in:", data.expires_in);
 
   cachedToken = {
     token: data.access_token,
