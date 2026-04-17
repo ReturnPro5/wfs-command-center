@@ -99,6 +99,7 @@ export interface DashboardOverview {
   salesYesterday: number;
   salesLast7Days: number;
   salesMTD: number;
+  salesYTD: number;
   inboundUnits: number;
   lowStockCount: number;
   overstockCount: number;

@@ -14,6 +14,7 @@ import {
   BarChart3,
   Boxes,
   CheckCircle2,
+  CalendarDays,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Alert, DashboardOverview } from "@/types/wfs";
@@ -105,6 +106,15 @@ function OverviewPage() {
                 value={overview.data.salesMTD}
                 subtitle="Month to date"
                 icon={TrendingDown}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <KpiCard
+                title="Sales YTD"
+                value={overview.data.salesYTD}
+                subtitle={`Jan 1 – today (${new Date().getFullYear()})`}
+                icon={CalendarDays}
               />
             </div>
 
