@@ -51,6 +51,7 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
       salesYesterday: salesByDay.get(yesterdayStr) ?? 0,
       salesLast7Days: computeSalesRange(salesByDay, 7),
       salesMTD: computeSalesMTD(salesByDay),
+      salesYTD: computeSalesYTD(salesByDay),
       inboundUnits: enriched.reduce((sum, i) => sum + i.inbound, 0),
       lowStockCount: enriched.filter(
         (i) => i.status === "replenish-immediately" || i.status === "replenish-soon"
@@ -83,7 +84,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
-      orders = await fetchAllOrders(daysAgo(30));
+      orders = await fetchAllOrders(startOfYear());
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
@@ -226,7 +227,8 @@ type RawInventoryItem = {
   lastUpdated: string;
 };
 
-const MAX_PAGES = 3; // Limit pagination to avoid Worker timeouts (Cloudflare has ~30s limit)
+const MAX_PAGES_INVENTORY = 3;
+const MAX_PAGES_ORDERS = 10; // up to 2000 orders; covers YTD for most sellers
 
 async function fetchAllInventory(): Promise<RawInventoryItem[]> {
   const items: RawInventoryItem[] = [];
@@ -257,9 +259,9 @@ async function fetchAllInventory(): Promise<RawInventoryItem[]> {
     // Cursor may be in payload body or in the response headers envelope
     cursor = (page as any)?.nextCursor ?? (raw as any)?.headers?.nextCursor ?? (raw as any)?.headers?.["WM_NEXT_CURSOR"];
     pages++;
-  } while (cursor && pages < MAX_PAGES);
+  } while (cursor && pages < MAX_PAGES_INVENTORY);
   console.log(`[WFS] fetchAllInventory done — pages: ${pages}, items: ${items.length}`);
-  if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES} pages (${items.length} items)`);
+  if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES_INVENTORY} pages (${items.length} items)`);
   return items;
 }
 
@@ -284,6 +286,7 @@ async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
         const sampleLine = sampleOrder.orderLines?.orderLine?.[0];
         const sampleStatuses = sampleLine?.orderLineStatuses?.orderLineStatus ?? [];
         console.log("[WFS] sample order keys:", Object.keys(sampleOrder).join(", "));
+        console.log("[WFS] sample orderDate value:", JSON.stringify(sampleOrder.orderDate));
         console.log("[WFS] sample line orderLineQuantity:", JSON.stringify(sampleLine?.orderLineQuantity));
         console.log("[WFS] sample line statuses:", JSON.stringify(sampleStatuses));
       }
@@ -292,9 +295,9 @@ async function fetchAllOrders(startDate: string): Promise<RawOrder[]> {
     orders.push(...parseOrdersResponse(page));
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
     pages++;
-  } while (cursor && pages < MAX_PAGES);
+  } while (cursor && pages < MAX_PAGES_ORDERS);
   console.log(`[WFS] fetchAllOrders done — pages: ${pages}, line items: ${orders.length}, total units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
-  if (cursor) console.warn(`[WFS] Orders truncated after ${MAX_PAGES} pages (${orders.length} orders)`);
+  if (cursor) console.warn(`[WFS] Orders truncated after ${MAX_PAGES_ORDERS} pages (${orders.length} orders)`);
   return orders;
 }
 
@@ -304,6 +307,10 @@ function daysAgo(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return d.toISOString();
+}
+
+function startOfYear(): string {
+  return new Date(new Date().getFullYear(), 0, 1).toISOString();
 }
 
 // ─── Parsers ────────────────────────────────────────────
@@ -326,7 +333,7 @@ type InventoryAndOrdersResult = {
 async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
   const [inventoryResult, ordersResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(daysAgo(30)),
+    fetchAllOrders(startOfYear()),
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
@@ -603,7 +610,12 @@ function parseInboundResponse(data: any): InboundShipment[] {
 function aggregateOrdersBySku(
   orders: RawOrder[]
 ): Map<string, { sku: string; productName: string; unitsSold7d: number; unitsSold30d: number; revenue7d: number; revenue30d: number }> {
-  const sevenDaysAgo = new Date();
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const thirtyDayStr = thirtyDaysAgo.toISOString().slice(0, 10);
+
+  const sevenDaysAgo = new Date(now);
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
   const sevenDayStr = sevenDaysAgo.toISOString().slice(0, 10);
 
@@ -619,9 +631,10 @@ function aggregateOrdersBySku(
       revenue30d: 0,
     };
 
-    existing.unitsSold30d += o.qty;
-    existing.revenue30d += o.revenue;
-
+    if (o.date >= thirtyDayStr) {
+      existing.unitsSold30d += o.qty;
+      existing.revenue30d += o.revenue;
+    }
     if (o.date >= sevenDayStr) {
       existing.unitsSold7d += o.qty;
       existing.revenue7d += o.revenue;
@@ -658,6 +671,15 @@ function computeSalesMTD(salesByDay: Map<string, number>): number {
   let total = 0;
   for (const [date, units] of salesByDay) {
     if (date >= monthStart) total += units;
+  }
+  return total;
+}
+
+function computeSalesYTD(salesByDay: Map<string, number>): number {
+  const yearStart = `${new Date().getFullYear()}-01-01`;
+  let total = 0;
+  for (const [date, units] of salesByDay) {
+    if (date >= yearStart) total += units;
   }
   return total;
 }
