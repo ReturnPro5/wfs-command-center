@@ -94,6 +94,8 @@ export interface SkuDetail {
 
 export interface DashboardOverview {
   totalWfsInventory: number;
+  wfsCatalogSkuCount: number;
+  activeSkuCount: number;
   salesYesterday: number;
   salesLast7Days: number;
   salesMTD: number;

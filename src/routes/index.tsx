@@ -12,6 +12,8 @@ import {
   TrendingDown,
   Archive,
   BarChart3,
+  Boxes,
+  CheckCircle2,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Alert, DashboardOverview } from "@/types/wfs";
@@ -61,6 +63,23 @@ function OverviewPage() {
 
         {overview.data && (
           <>
+            {/* WFS Catalog SKU counts */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <KpiCard
+                title="WFS Catalog SKUs"
+                value={overview.data.wfsCatalogSkuCount}
+                subtitle="Total SKUs enrolled in WFS"
+                icon={Boxes}
+              />
+              <KpiCard
+                title="Active SKUs"
+                value={overview.data.activeSkuCount}
+                subtitle="SKUs with stock on-hand"
+                icon={CheckCircle2}
+                variant={overview.data.activeSkuCount > 0 ? "healthy" : "warning"}
+              />
+            </div>
+
             {/* KPI Grid */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <KpiCard
