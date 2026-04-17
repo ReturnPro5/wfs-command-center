@@ -36,7 +36,6 @@ export async function getWalmartAccessToken(): Promise<string> {
       "Authorization": `Basic ${credentials}`,
       "Content-Type": "application/x-www-form-urlencoded",
       "Accept": "application/json",
-      "WM_SVC.NAME": "Walmart Marketplace",
       "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
     },
     body: "grant_type=client_credentials",
