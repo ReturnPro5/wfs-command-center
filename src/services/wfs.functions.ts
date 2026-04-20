@@ -6,6 +6,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import * as walmartApi from "@/services/walmartApi";
+import { getWalmartAccessToken } from "@/services/walmartAuth";
 import * as biz from "@/services/businessLogic";
 import type {
   DashboardOverview,
@@ -84,6 +85,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ salesData: SalesData[]; trends: SalesTrend[] }> => {
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
+      await getWalmartAccessToken();
       const w2End = daysAgo(30);
       const w1End = daysAgo(90);
       const [r, m, e] = await Promise.allSettled([
@@ -339,12 +341,11 @@ type InventoryAndOrdersResult = {
 };
 
 async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrdersResult> {
-  // Split YTD into 3 non-overlapping windows fetched in parallel.
-  // Walmart returns newest-first within each window; bounded windows give better
-  // coverage than one large unbounded window at the same total page budget.
-  //   recent: last 30 days  → accurate 7d / 30d / MTD / yesterday
-  //   mid:    30–90 days ago → extends coverage back ~2 months
-  //   early:  Jan 1 to 90 days ago → completes YTD (skipped if year started <90 days ago)
+  // Pre-warm auth token sequentially before any parallel API calls.
+  // Walmart rejects bursts of concurrent /v3/token requests; getting the token
+  // first ensures all parallel fetches below hit the module-level cache instead.
+  await getWalmartAccessToken();
+
   const w2End = daysAgo(30);
   const w1End = daysAgo(90);
 
@@ -352,7 +353,7 @@ async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrde
     fetchAllInventory(),
     fetchAllOrders(w2End, 12),               // last 30 days (12 pages ≈ 2400 orders)
     fetchAllOrders(w1End, 8, w2End),         // 30–90 days ago (8 pages ≈ 1600 orders)
-    fetchAllOrders(startOfYear(), 6, w1End), // Jan 1 → 90 days ago (6 pages ≈ 1200 orders; empty if year started within 90 days)
+    fetchAllOrders(startOfYear(), 6, w1End), // Jan 1 → 90 days ago (6 pages ≈ 1200 orders)
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
