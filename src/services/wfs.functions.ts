@@ -86,18 +86,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
       await getWalmartAccessToken();
-      const w2End = daysAgo(30);
-      const w1End = daysAgo(90);
-      const [r, m, e] = await Promise.allSettled([
-        fetchAllOrders(w2End, 12),
-        fetchAllOrders(w1End, 8, w2End),
-        fetchAllOrders(startOfYear(), 6, w1End),
-      ]);
-      orders = [
-        ...(r.status === "fulfilled" ? r.value : []),
-        ...(m.status === "fulfilled" ? m.value : []),
-        ...(e.status === "fulfilled" ? e.value : []),
-      ];
+      orders = await fetchAllOrders(startOfYear(), 8); // single YTD window
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
@@ -346,24 +335,15 @@ async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrde
   // first ensures all parallel fetches below hit the module-level cache instead.
   await getWalmartAccessToken();
 
-  const w2End = daysAgo(30);
-  const w1End = daysAgo(90);
-
-  const [inventoryResult, recentResult, midResult, earlyResult] = await Promise.allSettled([
+  const [inventoryResult, ordersResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(w2End, 12),               // last 30 days (12 pages ≈ 2400 orders)
-    fetchAllOrders(w1End, 8, w2End),         // 30–90 days ago (8 pages ≈ 1600 orders)
-    fetchAllOrders(startOfYear(), 6, w1End), // Jan 1 → 90 days ago (6 pages ≈ 1200 orders)
+    fetchAllOrders(startOfYear(), 8), // single YTD window — avoids overlap/triple-counting
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
-  const orders = [
-    ...resolveOrdersResult(recentResult, context),
-    ...resolveOrdersResult(midResult, context),
-    ...resolveOrdersResult(earlyResult, context),
-  ];
+  const orders = resolveOrdersResult(ordersResult, context);
 
-  console.log(`[WFS] loadInventoryAndOrders [${context}] total orders combined: ${orders.length}`);
+  console.log(`[WFS] loadInventoryAndOrders [${context}] total orders: ${orders.length}`);
 
   return {
     inventory: inventoryState.data,
