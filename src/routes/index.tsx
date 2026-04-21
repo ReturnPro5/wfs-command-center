@@ -15,9 +15,14 @@ import {
   Boxes,
   CheckCircle2,
   CalendarDays,
+  DollarSign,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Alert, DashboardOverview } from "@/types/wfs";
+
+function usd(amount: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(amount);
+}
 
 export const Route = createFileRoute("/")({
   component: OverviewPage,
@@ -81,7 +86,35 @@ function OverviewPage() {
               />
             </div>
 
-            {/* KPI Grid */}
+            {/* Revenue KPIs — matches Seller Center "WFS Sales Insights" */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <KpiCard
+                title="Revenue Today"
+                value={usd(overview.data.revenueToday)}
+                subtitle={`${overview.data.salesToday} units`}
+                icon={DollarSign}
+              />
+              <KpiCard
+                title="Revenue This Week"
+                value={usd(overview.data.revenueThisWeek)}
+                subtitle={`${overview.data.salesThisWeek} units`}
+                icon={DollarSign}
+              />
+              <KpiCard
+                title="Revenue MTD"
+                value={usd(overview.data.revenueMTD)}
+                subtitle={`${overview.data.salesMTD} units`}
+                icon={DollarSign}
+              />
+              <KpiCard
+                title="Revenue YTD"
+                value={usd(overview.data.revenueYTD)}
+                subtitle={`${overview.data.salesYTD} units · Jan 1–today`}
+                icon={CalendarDays}
+              />
+            </div>
+
+            {/* Inventory KPIs */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <KpiCard
                 title="Total WFS Inventory"
@@ -90,31 +123,22 @@ function OverviewPage() {
                 icon={Package}
               />
               <KpiCard
-                title="Sales Yesterday"
-                value={overview.data.salesYesterday}
-                subtitle="Units sold"
+                title="Units Today"
+                value={overview.data.salesToday}
+                subtitle="WFS units sold"
                 icon={ShoppingCart}
               />
               <KpiCard
-                title="Sales (7 Days)"
-                value={overview.data.salesLast7Days}
-                subtitle="Units sold"
+                title="Units This Week"
+                value={overview.data.salesThisWeek}
+                subtitle="WFS units (Sun–today)"
                 icon={BarChart3}
               />
               <KpiCard
-                title="Sales MTD"
+                title="Units MTD"
                 value={overview.data.salesMTD}
-                subtitle="Month to date"
+                subtitle="WFS units this month"
                 icon={TrendingDown}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <KpiCard
-                title="Sales YTD"
-                value={overview.data.salesYTD}
-                subtitle={`Jan 1 – today (${new Date().getFullYear()})`}
-                icon={CalendarDays}
               />
             </div>
 

@@ -96,10 +96,14 @@ export interface DashboardOverview {
   totalWfsInventory: number;
   wfsCatalogSkuCount: number;
   activeSkuCount: number;
-  salesYesterday: number;
-  salesLast7Days: number;
+  salesToday: number;
+  salesThisWeek: number;
   salesMTD: number;
   salesYTD: number;
+  revenueToday: number;
+  revenueThisWeek: number;
+  revenueMTD: number;
+  revenueYTD: number;
   inboundUnits: number;
   lowStockCount: number;
   overstockCount: number;

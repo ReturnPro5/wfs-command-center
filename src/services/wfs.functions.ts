@@ -31,6 +31,7 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
       }
 
     const salesByDay = aggregateOrdersByDay(orders);
+    const revenueByDay = aggregateRevenueByDay(orders);
     const salesBySku = aggregateOrdersBySku(orders);
 
     const enriched = inventory.map((item) => {
@@ -38,21 +39,22 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
       return biz.enrichInventoryItem(item, skuSales?.unitsSold30d ?? 0);
     });
 
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    console.log(`[WFS:getOverview] orders=${orders.length} units_ytd=${computeSalesYTD(salesByDay)} revenue_ytd=${computeRevYTD(revenueByDay).toFixed(2)}`);
 
     return {
       totalWfsInventory: enriched.reduce((sum, i) => sum + i.onHand, 0),
-      // wfsCatalogSkuCount = total SKUs enrolled in WFS (all items from /v3/fulfillment/inventory)
       wfsCatalogSkuCount: inventory.length,
-      // activeSkuCount = SKUs with at least 1 unit on-hand at WFS
       activeSkuCount: enriched.filter((i) => i.onHand > 0).length,
-      salesYesterday: salesByDay.get(yesterdayStr) ?? 0,
-      salesLast7Days: computeSalesRange(salesByDay, 7),
+      salesToday: salesByDay.get(todayStr) ?? 0,
+      salesThisWeek: computeSalesThisWeek(salesByDay),
       salesMTD: computeSalesMTD(salesByDay),
       salesYTD: computeSalesYTD(salesByDay),
+      revenueToday: revenueByDay.get(todayStr) ?? 0,
+      revenueThisWeek: computeSalesThisWeek(revenueByDay),
+      revenueMTD: computeRevMTD(revenueByDay),
+      revenueYTD: computeRevYTD(revenueByDay),
       inboundUnits: enriched.reduce((sum, i) => sum + i.inbound, 0),
       lowStockCount: enriched.filter(
         (i) => i.status === "replenish-immediately" || i.status === "replenish-soon"
@@ -568,14 +570,26 @@ function parseOrdersResponse(data: any): RawOrder[] {
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
     for (const line of lines) {
+      // WFS-only: skip seller-fulfilled and drop-ship lines.
+      // WFS lines have shipNode.type "FC" (or "WFS"); seller-fulfilled have "SELLER"/"DSV".
+      // If the field is absent we include the line (conservative — avoids dropping valid WFS lines).
+      const shipNodeType: string | undefined =
+        line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType;
+      if (
+        shipNodeType &&
+        shipNodeType !== "FC" &&
+        shipNodeType !== "WFS" &&
+        shipNodeType !== "WMFS"
+      ) {
+        continue;
+      }
+
       const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
       if (orderedQty <= 0 || isNaN(orderedQty)) continue;
 
       // Subtract only explicitly cancelled quantities.
       // Seller Center "units sold" = all non-cancelled orders
       // (includes Created, Acknowledged, Shipped, Delivered — excludes Cancelled only).
-      // We can't use shipped-status-only because WFS orders sit in Acknowledged
-      // for 1-2 days before shipping, and Seller Center counts them immediately.
       const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
       const cancelledQty = statuses
         .filter((s: any) => s.status === "Cancelled")
@@ -584,12 +598,19 @@ function parseOrdersResponse(data: any): RawOrder[] {
       const qty = orderedQty - cancelledQty;
       if (qty <= 0) continue;
 
+      // chargeAmount.amount is already the line total (unit price × qty).
+      // Use the PRODUCT charge; fall back to charge[0] if chargeType is absent.
+      const charges: any[] = line.charges?.charge ?? [];
+      const productCharge =
+        charges.find((c: any) => c.chargeType === "PRODUCT" || c.chargeName === "ItemPrice") ??
+        charges[0];
+      const revenue = Number(productCharge?.chargeAmount?.amount ?? line.price ?? 0);
+
       result.push({
         sku: line.item?.sku ?? line.sku ?? "",
         productName: line.item?.productName ?? line.productName ?? "",
         qty,
-        revenue:
-          Number(line.charges?.charge?.[0]?.chargeAmount?.amount ?? line.price ?? 0) * qty,
+        revenue,
         date: normalizedOrderDate,
       });
     }
@@ -660,16 +681,6 @@ function aggregateOrdersByDay(orders: RawOrder[]): Map<string, number> {
   return map;
 }
 
-function computeSalesRange(salesByDay: Map<string, number>, days: number): number {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
-  let total = 0;
-  for (const [date, units] of salesByDay) {
-    if (date >= cutoffStr) total += units;
-  }
-  return total;
-}
 
 function computeSalesMTD(salesByDay: Map<string, number>): number {
   const today = new Date();
@@ -686,6 +697,46 @@ function computeSalesYTD(salesByDay: Map<string, number>): number {
   let total = 0;
   for (const [date, units] of salesByDay) {
     if (date >= yearStart) total += units;
+  }
+  return total;
+}
+
+// Current week = Sunday through today (matches Seller Center "This week")
+function computeSalesThisWeek(byDay: Map<string, number>): number {
+  const today = new Date();
+  const sunday = new Date(today);
+  sunday.setDate(today.getDate() - today.getDay());
+  const sundayStr = sunday.toISOString().slice(0, 10);
+  let total = 0;
+  for (const [date, val] of byDay) {
+    if (date >= sundayStr) total += val;
+  }
+  return total;
+}
+
+function aggregateRevenueByDay(orders: RawOrder[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const o of orders) {
+    map.set(o.date, (map.get(o.date) ?? 0) + o.revenue);
+  }
+  return map;
+}
+
+function computeRevMTD(revenueByDay: Map<string, number>): number {
+  const today = new Date();
+  const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  let total = 0;
+  for (const [date, rev] of revenueByDay) {
+    if (date >= monthStart) total += rev;
+  }
+  return total;
+}
+
+function computeRevYTD(revenueByDay: Map<string, number>): number {
+  const yearStart = `${new Date().getFullYear()}-01-01`;
+  let total = 0;
+  for (const [date, rev] of revenueByDay) {
+    if (date >= yearStart) total += rev;
   }
   return total;
 }
