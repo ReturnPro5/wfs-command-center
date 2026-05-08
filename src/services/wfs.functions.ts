@@ -560,19 +560,24 @@ function parseInventoryResponse(data: any): RawInventoryItem[] {
     .filter((item: RawInventoryItem) => item.sku !== "");
 }
 
-function parseOrdersResponse(data: any): RawOrder[] {
+function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
   const orderList = data?.list?.elements?.order ?? data?.orders ?? data?.elements ?? [];
   const result: RawOrder[] = [];
 
-  for (const order of orderList) {
+  for (let oi = 0; oi < orderList.length; oi++) {
+    const order = orderList[oi];
     const lines = order.orderLines?.orderLine ?? order.lines ?? [];
     const rawDate = order.orderDate ?? order.createdDate ?? order.orderDateTime ?? order.createdAt ?? null;
+
+    // Log first 3 orders to diagnose date format
+    if (logSample && oi < 3) {
+      console.log(`[WFS] sample order[${oi}] rawDate=`, JSON.stringify(rawDate), "type=", typeof rawDate, "keys=", Object.keys(order).join(","));
+    }
+
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
     for (const line of lines) {
       // WFS-only: skip seller-fulfilled and drop-ship lines.
-      // WFS lines have shipNode.type "FC" (or "WFS"); seller-fulfilled have "SELLER"/"DSV".
-      // If the field is absent we include the line (conservative — avoids dropping valid WFS lines).
       const shipNodeType: string | undefined =
         line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType;
       if (
@@ -587,9 +592,6 @@ function parseOrdersResponse(data: any): RawOrder[] {
       const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
       if (orderedQty <= 0 || isNaN(orderedQty)) continue;
 
-      // Subtract only explicitly cancelled quantities.
-      // Seller Center "units sold" = all non-cancelled orders
-      // (includes Created, Acknowledged, Shipped, Delivered — excludes Cancelled only).
       const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
       const cancelledQty = statuses
         .filter((s: any) => s.status === "Cancelled")
@@ -598,8 +600,6 @@ function parseOrdersResponse(data: any): RawOrder[] {
       const qty = orderedQty - cancelledQty;
       if (qty <= 0) continue;
 
-      // chargeAmount.amount is already the line total (unit price × qty).
-      // Use the PRODUCT charge; fall back to charge[0] if chargeType is absent.
       const charges: any[] = line.charges?.charge ?? [];
       const productCharge =
         charges.find((c: any) => c.chargeType === "PRODUCT" || c.chargeName === "ItemPrice") ??
