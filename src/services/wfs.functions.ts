@@ -41,7 +41,18 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
 
     const todayStr = new Date().toISOString().slice(0, 10);
 
-    console.log(`[WFS:getOverview] orders=${orders.length} units_ytd=${computeSalesYTD(salesByDay)} revenue_ytd=${computeRevYTD(revenueByDay).toFixed(2)}`);
+    // Date distribution diagnostics
+    const dateCounts = new Map<string, number>();
+    for (const o of orders) {
+      dateCounts.set(o.date, (dateCounts.get(o.date) ?? 0) + 1);
+    }
+    const sortedDates = [...dateCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const firstDate = sortedDates[0]?.[0] ?? "none";
+    const lastDate = sortedDates[sortedDates.length - 1]?.[0] ?? "none";
+    console.log(`[WFS:getOverview] date range: ${firstDate} → ${lastDate}, unique dates: ${sortedDates.length}`);
+    console.log(`[WFS:getOverview] first 5 dates:`, sortedDates.slice(0, 5).map(([d, c]) => `${d}(${c})`).join(", "));
+    console.log(`[WFS:getOverview] last 5 dates:`, sortedDates.slice(-5).map(([d, c]) => `${d}(${c})`).join(", "));
+    console.log(`[WFS:getOverview] today=${todayStr} salesToday=${salesByDay.get(todayStr) ?? 0} revToday=${revenueByDay.get(todayStr)?.toFixed(2) ?? 0}`);
 
     return {
       totalWfsInventory: enriched.reduce((sum, i) => sum + i.onHand, 0),
