@@ -100,21 +100,22 @@ export async function getOrders(params: {
   limit?: number;
   status?: string;
 }) {
-  // Walmart returns nextCursor as a full query string (e.g. "?limit=200&cursor=...").
-  // When we have a cursor, use it as-is instead of rebuilding params.
-  if (params.nextCursor) {
-    const cursorPath = params.nextCursor.startsWith("/")
-      ? params.nextCursor
-      : `/v3/orders${params.nextCursor.startsWith("?") ? params.nextCursor : `?${params.nextCursor}`}`;
-    return walmartFetch<any>(cursorPath);
-  }
-
   const searchParams = new URLSearchParams({
     createdStartDate: params.createdStartDate,
     limit: String(params.limit || 200),
     ...(params.createdEndDate ? { createdEndDate: params.createdEndDate } : {}),
     ...(params.status ? { status: params.status } : {}),
   });
+
+  // Walmart returns nextCursor as a full query string "?limit=200&cursor=ABC&...".
+  // Extract the actual cursor token and pass it as the `cursor` parameter.
+  if (params.nextCursor) {
+    const cursorMatch = params.nextCursor.match(/[?&]cursor=([^&]+)/);
+    if (cursorMatch) {
+      searchParams.set("cursor", decodeURIComponent(cursorMatch[1]));
+    }
+  }
+
   return walmartFetch<any>(`/v3/orders?${searchParams}`);
 }
 
