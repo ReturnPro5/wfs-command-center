@@ -350,7 +350,7 @@ async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrde
 
   const [inventoryResult, ordersResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(startOfYear(), 8), // single YTD window — avoids overlap/triple-counting
+    fetchAllOrders(startOfYear(), 20), // single YTD window — paginate fully
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
