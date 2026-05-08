@@ -41,7 +41,18 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
 
     const todayStr = new Date().toISOString().slice(0, 10);
 
-    console.log(`[WFS:getOverview] orders=${orders.length} units_ytd=${computeSalesYTD(salesByDay)} revenue_ytd=${computeRevYTD(revenueByDay).toFixed(2)}`);
+    // Date distribution diagnostics
+    const dateCounts = new Map<string, number>();
+    for (const o of orders) {
+      dateCounts.set(o.date, (dateCounts.get(o.date) ?? 0) + 1);
+    }
+    const sortedDates = [...dateCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const firstDate = sortedDates[0]?.[0] ?? "none";
+    const lastDate = sortedDates[sortedDates.length - 1]?.[0] ?? "none";
+    console.log(`[WFS:getOverview] date range: ${firstDate} → ${lastDate}, unique dates: ${sortedDates.length}`);
+    console.log(`[WFS:getOverview] first 5 dates:`, sortedDates.slice(0, 5).map(([d, c]) => `${d}(${c})`).join(", "));
+    console.log(`[WFS:getOverview] last 5 dates:`, sortedDates.slice(-5).map(([d, c]) => `${d}(${c})`).join(", "));
+    console.log(`[WFS:getOverview] today=${todayStr} salesToday=${salesByDay.get(todayStr) ?? 0} revToday=${revenueByDay.get(todayStr)?.toFixed(2) ?? 0}`);
 
     return {
       totalWfsInventory: enriched.reduce((sum, i) => sum + i.onHand, 0),
@@ -88,7 +99,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
       await getWalmartAccessToken();
-      orders = await fetchAllOrders(startOfYear(), 8); // single YTD window
+      orders = await fetchAllOrders(startOfYear(), 20); // single YTD window
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
@@ -289,7 +300,7 @@ async function fetchAllOrders(
     });
     const page = (raw as any)?.payload ?? raw;
 
-    orders.push(...parseOrdersResponse(page));
+    orders.push(...parseOrdersResponse(page, pages === 0));
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
     pages++;
   } while (cursor && pages < maxPages);
@@ -339,7 +350,7 @@ async function loadInventoryAndOrders(context: string): Promise<InventoryAndOrde
 
   const [inventoryResult, ordersResult] = await Promise.allSettled([
     fetchAllInventory(),
-    fetchAllOrders(startOfYear(), 8), // single YTD window — avoids overlap/triple-counting
+    fetchAllOrders(startOfYear(), 20), // single YTD window — paginate fully
   ]);
 
   const inventoryState = resolveInventoryResult(inventoryResult, context);
@@ -560,19 +571,24 @@ function parseInventoryResponse(data: any): RawInventoryItem[] {
     .filter((item: RawInventoryItem) => item.sku !== "");
 }
 
-function parseOrdersResponse(data: any): RawOrder[] {
+function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
   const orderList = data?.list?.elements?.order ?? data?.orders ?? data?.elements ?? [];
   const result: RawOrder[] = [];
 
-  for (const order of orderList) {
+  for (let oi = 0; oi < orderList.length; oi++) {
+    const order = orderList[oi];
     const lines = order.orderLines?.orderLine ?? order.lines ?? [];
     const rawDate = order.orderDate ?? order.createdDate ?? order.orderDateTime ?? order.createdAt ?? null;
+
+    // Log first 3 orders to diagnose date format
+    if (logSample && oi < 3) {
+      console.log(`[WFS] sample order[${oi}] rawDate=`, JSON.stringify(rawDate), "type=", typeof rawDate, "keys=", Object.keys(order).join(","));
+    }
+
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
     for (const line of lines) {
       // WFS-only: skip seller-fulfilled and drop-ship lines.
-      // WFS lines have shipNode.type "FC" (or "WFS"); seller-fulfilled have "SELLER"/"DSV".
-      // If the field is absent we include the line (conservative — avoids dropping valid WFS lines).
       const shipNodeType: string | undefined =
         line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType;
       if (
@@ -587,9 +603,6 @@ function parseOrdersResponse(data: any): RawOrder[] {
       const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
       if (orderedQty <= 0 || isNaN(orderedQty)) continue;
 
-      // Subtract only explicitly cancelled quantities.
-      // Seller Center "units sold" = all non-cancelled orders
-      // (includes Created, Acknowledged, Shipped, Delivered — excludes Cancelled only).
       const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
       const cancelledQty = statuses
         .filter((s: any) => s.status === "Cancelled")
@@ -598,8 +611,6 @@ function parseOrdersResponse(data: any): RawOrder[] {
       const qty = orderedQty - cancelledQty;
       if (qty <= 0) continue;
 
-      // chargeAmount.amount is already the line total (unit price × qty).
-      // Use the PRODUCT charge; fall back to charge[0] if chargeType is absent.
       const charges: any[] = line.charges?.charge ?? [];
       const productCharge =
         charges.find((c: any) => c.chargeType === "PRODUCT" || c.chargeName === "ItemPrice") ??

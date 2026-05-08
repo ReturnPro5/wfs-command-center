@@ -104,9 +104,18 @@ export async function getOrders(params: {
     createdStartDate: params.createdStartDate,
     limit: String(params.limit || 200),
     ...(params.createdEndDate ? { createdEndDate: params.createdEndDate } : {}),
-    ...(params.nextCursor ? { nextCursor: params.nextCursor } : {}),
     ...(params.status ? { status: params.status } : {}),
   });
+
+  // Walmart returns nextCursor as a full query string "?limit=200&cursor=ABC&...".
+  // Extract the actual cursor token and pass it as the `cursor` parameter.
+  if (params.nextCursor) {
+    const cursorMatch = params.nextCursor.match(/[?&]cursor=([^&]+)/);
+    if (cursorMatch) {
+      searchParams.set("cursor", decodeURIComponent(cursorMatch[1]));
+    }
+  }
+
   return walmartFetch<any>(`/v3/orders?${searchParams}`);
 }
 
