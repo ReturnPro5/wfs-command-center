@@ -289,7 +289,7 @@ async function fetchAllOrders(
     });
     const page = (raw as any)?.payload ?? raw;
 
-    orders.push(...parseOrdersResponse(page));
+    orders.push(...parseOrdersResponse(page, pages === 0));
     cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
     pages++;
   } while (cursor && pages < maxPages);
