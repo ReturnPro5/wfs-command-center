@@ -99,7 +99,7 @@ export const getSalesVelocity = createServerFn({ method: "GET" }).handler(
     let orders: Awaited<ReturnType<typeof fetchAllOrders>> = [];
     try {
       await getWalmartAccessToken();
-      orders = await fetchAllOrders(startOfYear(), 8); // single YTD window
+      orders = await fetchAllOrders(startOfYear(), 20); // single YTD window
     } catch (err) {
       if (isRecoverableWalmartError(err)) {
         console.warn("[WFS] sales velocity: orders temporarily unavailable, using empty fallback.", (err as Error).message);
