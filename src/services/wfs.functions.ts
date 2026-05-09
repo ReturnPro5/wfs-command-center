@@ -290,8 +290,10 @@ async function fetchAllOrders(
   if (endDate && new Date(endDate) <= new Date(startDate)) return [];
 
   const orders: RawOrder[] = [];
+  const seen = new Set<string>(); // dedup by purchaseOrderId+lineNumber+sku
   let cursor: string | undefined;
   let pages = 0;
+  let dupesThisRun = 0;
   do {
     const raw = await walmartApi.getOrders({
       createdStartDate: startDate,
@@ -300,15 +302,35 @@ async function fetchAllOrders(
     });
     const page = (raw as any)?.payload ?? raw;
 
-    orders.push(...parseOrdersResponse(page, pages === 0));
-    cursor = page?.nextCursor ?? page?.list?.meta?.nextCursor;
+    const pageOrders = parseOrdersResponse(page, pages === 0);
+    let added = 0;
+    for (const o of pageOrders) {
+      const key = `${o.purchaseOrderId}|${o.lineNumber}|${o.sku}`;
+      if (seen.has(key)) {
+        dupesThisRun++;
+        continue;
+      }
+      seen.add(key);
+      orders.push(o);
+      added++;
+    }
+
+    const nextCursor: string | undefined =
+      page?.list?.meta?.nextCursor ?? page?.nextCursor ?? page?.meta?.nextCursor;
+    console.log(`[WFS] orders page ${pages}: ${pageOrders.length} lines, ${added} new, ${pageOrders.length - added} dupes`);
+
+    if (nextCursor && nextCursor === cursor) {
+      console.warn(`[WFS] orders cursor did not advance — breaking at page ${pages}`);
+      break;
+    }
+    cursor = nextCursor;
     pages++;
   } while (cursor && pages < maxPages);
 
   const label = endDate
     ? `${startDate.slice(0, 10)}→${endDate.slice(0, 10)}`
     : `${startDate.slice(0, 10)}→now`;
-  console.log(`[WFS] orders window [${label}] — pages: ${pages}, line items: ${orders.length}, units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
+  console.log(`[WFS] orders window [${label}] — pages: ${pages}, unique lines: ${orders.length}, dupes filtered: ${dupesThisRun}, units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
   if (cursor) console.warn(`[WFS] Orders window [${label}] truncated after ${maxPages} pages`);
   return orders;
 }
@@ -333,6 +355,8 @@ interface RawOrder {
   qty: number;
   revenue: number;
   date: string;
+  purchaseOrderId: string;
+  lineNumber: string;
 }
 
 type InventoryAndOrdersResult = {
@@ -587,18 +611,26 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
 
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
+    // WFS-only filter: check both order-level shipNode and line-level fulfillment.
+    // Walmart's WFS ship node type is "WFSFulfilled" (or contains "WFS").
+    const orderShipNodeType: string | undefined =
+      order.shipNode?.type ?? order.shipNode?.shipNodeType;
+    const isWfsAtOrderLevel = orderShipNodeType
+      ? /WFS|FC/i.test(orderShipNodeType)
+      : null;
+
     for (const line of lines) {
-      // WFS-only: skip seller-fulfilled and drop-ship lines.
-      const shipNodeType: string | undefined =
+      const lineShipNodeType: string | undefined =
         line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType;
-      if (
-        shipNodeType &&
-        shipNodeType !== "FC" &&
-        shipNodeType !== "WFS" &&
-        shipNodeType !== "WMFS"
-      ) {
-        continue;
-      }
+      const isWfsAtLineLevel = lineShipNodeType
+        ? /WFS|FC/i.test(lineShipNodeType)
+        : null;
+
+      // Require WFS at either level. If neither has shipNode info, skip the line
+      // (we cannot confirm it is WFS, so exclude it from WFS metrics).
+      if (isWfsAtOrderLevel === false) continue;
+      if (isWfsAtOrderLevel === null && isWfsAtLineLevel !== true) continue;
+      if (isWfsAtLineLevel === false) continue;
 
       const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
       if (orderedQty <= 0 || isNaN(orderedQty)) continue;
@@ -623,6 +655,8 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
         qty,
         revenue,
         date: normalizedOrderDate,
+        purchaseOrderId: String(order.purchaseOrderId ?? order.customerOrderId ?? ""),
+        lineNumber: String(line.lineNumber ?? line.orderLineNumber ?? ""),
       });
     }
   }

@@ -100,21 +100,21 @@ export async function getOrders(params: {
   limit?: number;
   status?: string;
 }) {
+  // Walmart returns nextCursor as a complete query string (e.g.
+  //   "?limit=200&cursor=...&soIndex=...&poIndex=...&createdStartDate=...").
+  // The recommended use is to append it directly to the endpoint, untouched —
+  // re-parsing through URLSearchParams can mangle the base64 cursor.
+  if (params.nextCursor) {
+    const qs = params.nextCursor.startsWith("?") ? params.nextCursor : `?${params.nextCursor}`;
+    return walmartFetch<any>(`/v3/orders${qs}`);
+  }
+
   const searchParams = new URLSearchParams({
     createdStartDate: params.createdStartDate,
     limit: String(params.limit || 200),
     ...(params.createdEndDate ? { createdEndDate: params.createdEndDate } : {}),
     ...(params.status ? { status: params.status } : {}),
   });
-
-  // Walmart returns nextCursor as a full query string "?limit=200&cursor=ABC&...".
-  // Extract the actual cursor token and pass it as the `cursor` parameter.
-  if (params.nextCursor) {
-    const cursorMatch = params.nextCursor.match(/[?&]cursor=([^&]+)/);
-    if (cursorMatch) {
-      searchParams.set("cursor", decodeURIComponent(cursorMatch[1]));
-    }
-  }
 
   return walmartFetch<any>(`/v3/orders?${searchParams}`);
 }
