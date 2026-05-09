@@ -153,11 +153,15 @@ export async function getInboundShipment(shipmentId: string) {
 
 // ─── Items / Catalog ────────────────────────────────────
 export async function getItems(nextCursor?: string, lifecycleStatus?: string) {
-  const params = new URLSearchParams({ limit: "200" });
+  // Walmart's nextCursor is returned as a full query string (e.g.
+  //   "?nextCursor=AoE...&limit=200&lifecycleStatus=ACTIVE").
+  // Append it verbatim — re-parsing through URLSearchParams loses bound state.
+  if (nextCursor && nextCursor !== "*" && nextCursor.length > 0) {
+    const qs = nextCursor.startsWith("?") ? nextCursor : `?${nextCursor.startsWith("nextCursor=") ? nextCursor : `nextCursor=${nextCursor}`}`;
+    return walmartFetch<any>(`/v3/items${qs}`);
+  }
+  const params = new URLSearchParams({ limit: "200", nextCursor: "*" });
   if (lifecycleStatus) params.set("lifecycleStatus", lifecycleStatus);
-  // Walmart only returns `nextCursor` in the response when you pass one on the
-  // way in. Use "*" on the first call to opt into cursor-based pagination.
-  params.set("nextCursor", nextCursor && nextCursor.length > 0 ? nextCursor : "*");
   return walmartFetch<any>(`/v3/items?${params}`);
 }
 
