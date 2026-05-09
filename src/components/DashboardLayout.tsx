@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Truck,
   AlertTriangle,
+  Barcode,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
