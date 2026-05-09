@@ -245,7 +245,7 @@ export const getSkuDetail = createServerFn({ method: "POST" })
     const [inventoryResult, ordersResult, inboundResult] = await Promise.allSettled([
       walmartApi.getInventoryForSku(sku),
       fetchAllOrders(daysAgo(30)),
-      walmartApi.getInboundShipments(),
+      fetchInboundShipmentsCached(),
     ]);
 
     if (inventoryResult.status === "rejected") {
