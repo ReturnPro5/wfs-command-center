@@ -44,7 +44,7 @@ function CatalogPage() {
   const [search, setSearch] = useState("");
 
   // Use refs to avoid stale closures inside the load loop
-  const offsetRef = useRef<number>(0);
+  const cursorRef = useRef<string | null>(null);
   const lifecycleRef = useRef<Lifecycle>("ACTIVE");
   const seenRef = useRef<Set<string>>(new Set());
   const runningRef = useRef(false);
@@ -69,7 +69,7 @@ function CatalogPage() {
       while (!cancelledRef.current && !pausedRef.current) {
         const page = await getCatalogPage({
           data: {
-            offset: offsetRef.current,
+            cursor: cursorRef.current,
             lifecycle: lifecycleRef.current,
           },
         });
@@ -84,10 +84,10 @@ function CatalogPage() {
         if (fresh.length) setItems((prev) => [...prev, ...fresh]);
         if (page.totalCount != null) setTotalCount(page.totalCount);
 
-        if (page.nextOffset != null) {
-          offsetRef.current = page.nextOffset;
+        if (page.nextCursor) {
+          cursorRef.current = page.nextCursor;
         } else if (page.nextLifecycle) {
-          offsetRef.current = 0;
+          cursorRef.current = null;
           lifecycleRef.current = page.nextLifecycle;
           setLifecycle(page.nextLifecycle);
         } else {
