@@ -152,8 +152,8 @@ export interface SalesDiagnosticLine {
   qty: number;
   revenue: number;
   date: string;
-  orderShipNode: unknown;
-  lineFulfillment: unknown;
+  orderShipNode: any;
+  lineFulfillment: any;
 }
 
 export interface SalesDiagnostics {
