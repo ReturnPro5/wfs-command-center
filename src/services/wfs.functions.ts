@@ -1208,3 +1208,237 @@ export const getCatalogPage = createServerFn({ method: "POST" })
 
     return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
   });
+
+// ─── Cached Catalog (persisted in DB) ───────────────────
+
+export interface CatalogSyncState {
+  cursor: string | null;
+  lifecycle: Lifecycle;
+  last_sync_at: string | null;
+  last_full_sync_at: string | null;
+  status: string;
+  error: string | null;
+  pages_this_run: number;
+  items_this_run: number;
+}
+
+type Lifecycle = "ACTIVE" | "ARCHIVED" | "RETIRED";
+
+export interface CachedCatalogResponse {
+  items: CatalogIdentifier[];
+  state: CatalogSyncState;
+  totalCached: number;
+}
+
+export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
+  async (): Promise<CachedCatalogResponse> => {
+    // Page through to bypass Supabase 1000-row limit
+    const PAGE = 1000;
+    let from = 0;
+    const items: CatalogIdentifier[] = [];
+    while (true) {
+      const { data, error } = await supabaseAdmin
+        .from("catalog_items")
+        .select("sku, product_name, gtin, upc")
+        .order("sku", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(`catalog cache read failed: ${error.message}`);
+      if (!data || data.length === 0) break;
+      for (const r of data) {
+        items.push({ sku: r.sku, productName: r.product_name ?? "", gtin: r.gtin ?? "", upc: r.upc ?? "" });
+      }
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+
+    const { data: stateRow, error: stateErr } = await supabaseAdmin
+      .from("catalog_sync_state")
+      .select("*")
+      .eq("id", 1)
+      .single();
+    if (stateErr) throw new Error(`catalog state read failed: ${stateErr.message}`);
+
+    return {
+      items,
+      totalCached: items.length,
+      state: stateRow as CatalogSyncState,
+    };
+  }
+);
+
+const FULL_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+export interface SyncStepResult {
+  added: number;
+  updated: number;
+  pageItems: number;
+  totalCached: number;
+  done: boolean;
+  state: CatalogSyncState;
+}
+
+export const syncCatalogStep = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z.object({ reset: z.boolean().optional() }).parse(data ?? {})
+  )
+  .handler(async ({ data }): Promise<SyncStepResult> => {
+    const { data: stateRow, error: stateErr } = await supabaseAdmin
+      .from("catalog_sync_state")
+      .select("*")
+      .eq("id", 1)
+      .single();
+    if (stateErr) throw new Error(`sync state read failed: ${stateErr.message}`);
+
+    let cursor: string | null = stateRow.cursor;
+    let lifecycle: Lifecycle = (stateRow.lifecycle as Lifecycle) ?? "ACTIVE";
+    let pagesThisRun = stateRow.pages_this_run ?? 0;
+    let itemsThisRun = stateRow.items_this_run ?? 0;
+
+    // Decide if a fresh full re-sync is due
+    const lastFull = stateRow.last_full_sync_at ? new Date(stateRow.last_full_sync_at).getTime() : 0;
+    const fullDue = Date.now() - lastFull > FULL_RESYNC_INTERVAL_MS;
+    const startingFresh = data.reset || stateRow.status === "idle" || stateRow.status === "done" || stateRow.status === "error";
+
+    if (data.reset || (startingFresh && fullDue)) {
+      cursor = null;
+      lifecycle = "ACTIVE";
+      pagesThisRun = 0;
+      itemsThisRun = 0;
+    } else if (startingFresh) {
+      // Resume: keep saved cursor/lifecycle, reset run counters
+      pagesThisRun = 0;
+      itemsThisRun = 0;
+    }
+
+    // Fetch one page from Walmart
+    const page = await getCatalogPageInternal(cursor, lifecycle);
+
+    // Upsert items
+    let added = 0;
+    let updated = 0;
+    if (page.items.length) {
+      const now = new Date().toISOString();
+      // Find which SKUs already exist
+      const skus = page.items.map((i) => i.sku);
+      const { data: existing } = await supabaseAdmin
+        .from("catalog_items")
+        .select("sku")
+        .in("sku", skus);
+      const existingSet = new Set((existing ?? []).map((r: any) => r.sku));
+      added = skus.filter((s) => !existingSet.has(s)).length;
+      updated = skus.length - added;
+
+      const rows = page.items.map((it) => ({
+        sku: it.sku,
+        product_name: it.productName,
+        gtin: it.gtin,
+        upc: it.upc,
+        lifecycle: page.lifecycle,
+        last_seen_at: now,
+        last_synced_at: now,
+      }));
+      // Upsert in chunks
+      const CHUNK = 500;
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const slice = rows.slice(i, i + CHUNK);
+        const { error: upErr } = await supabaseAdmin
+          .from("catalog_items")
+          .upsert(slice, { onConflict: "sku", ignoreDuplicates: false });
+        if (upErr) throw new Error(`catalog upsert failed: ${upErr.message}`);
+      }
+    }
+
+    // Compute next state
+    let nextCursor: string | null = page.nextCursor;
+    let nextLifecycle: Lifecycle = lifecycle;
+    let done = false;
+    if (!nextCursor && page.nextLifecycle) {
+      nextLifecycle = page.nextLifecycle;
+    } else if (!nextCursor && !page.nextLifecycle) {
+      done = true;
+    }
+
+    pagesThisRun += 1;
+    itemsThisRun += page.items.length;
+
+    const nowIso = new Date().toISOString();
+    const update: any = {
+      cursor: done ? null : nextCursor,
+      lifecycle: done ? "ACTIVE" : nextLifecycle,
+      last_sync_at: nowIso,
+      status: done ? "done" : "running",
+      error: null,
+      pages_this_run: pagesThisRun,
+      items_this_run: itemsThisRun,
+    };
+    if (done) update.last_full_sync_at = nowIso;
+
+    const { data: newState, error: updErr } = await supabaseAdmin
+      .from("catalog_sync_state")
+      .update(update)
+      .eq("id", 1)
+      .select("*")
+      .single();
+    if (updErr) throw new Error(`sync state update failed: ${updErr.message}`);
+
+    const { count } = await supabaseAdmin
+      .from("catalog_items")
+      .select("sku", { count: "exact", head: true });
+
+    return {
+      added,
+      updated,
+      pageItems: page.items.length,
+      totalCached: count ?? 0,
+      done,
+      state: newState as CatalogSyncState,
+    };
+  });
+
+// Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper
+async function getCatalogPageInternal(
+  cursorIn: string | null,
+  lifecycle: Lifecycle
+): Promise<CatalogPage> {
+  await getWalmartAccessToken();
+  const cursor = cursorIn ?? "*";
+  let raw: any;
+  try {
+    raw = await walmartApi.getItems(cursor, lifecycle);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) {
+      const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
+      return { items: [], nextCursor: null, totalCount: null, lifecycle, nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null };
+    }
+    throw err;
+  }
+  const page = (raw as any)?.payload ?? raw;
+  const list: any[] =
+    page?.ItemResponse ?? page?.itemResponse ?? page?.items ?? page?.elements ?? page?.list?.elements?.item ?? [];
+  const items: CatalogIdentifier[] = list
+    .map((it: any) => ({
+      sku: String(it.sku ?? it.SKU ?? it.mart_sku ?? ""),
+      productName: String(it.productName ?? it.product_name ?? it.name ?? ""),
+      gtin: String(it.gtin ?? it.GTIN ?? ""),
+      upc: String(
+        it.upc ?? it.UPC ?? it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ?? ""
+      ),
+    }))
+    .filter((i) => i.sku);
+  const totalCount: number | null =
+    page?.totalItems ?? page?.totalCount ?? page?.meta?.totalCount ?? page?.list?.meta?.totalCount ?? null;
+  let nextCursor: string | null =
+    page?.nextCursor ?? page?.meta?.nextCursor ?? page?.list?.meta?.nextCursor ?? null;
+  if (nextCursor === "*" || nextCursor === "" || nextCursor === cursor) nextCursor = null;
+  let nextLifecycle: Lifecycle | null = null;
+  if (!nextCursor) {
+    const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
+    nextLifecycle = LIFECYCLE_ORDER[idx + 1] ?? null;
+  }
+  console.log(
+    `[WFS:catalog-sync] lifecycle=${lifecycle} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, nextCursor=${nextCursor ? "yes" : "no"}`
+  );
+  return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
+}
+
