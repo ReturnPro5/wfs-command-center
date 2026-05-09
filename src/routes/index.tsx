@@ -173,6 +173,8 @@ function OverviewPage() {
           </>
         )}
 
+        <YtdReconciliationPanel />
+
         {/* Alerts Panel */}
         {alerts.data && alerts.data.length > 0 && (
           <div className="rounded-lg border bg-card">
