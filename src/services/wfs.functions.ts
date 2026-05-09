@@ -1100,3 +1100,67 @@ function aggregateDailyTrends(orders: RawOrder[]): SalesTrend[] {
     .map(([date, data]) => ({ date, ...data }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
+
+// ─── Catalog Identifiers (SKU / GTIN / UPC) ─────────────
+export interface CatalogIdentifier {
+  sku: string;
+  productName: string;
+  gtin: string;
+  upc: string;
+}
+
+const MAX_PAGES_CATALOG = 25;
+
+export const getCatalogIdentifiers = createServerFn({ method: "GET" }).handler(
+  async (): Promise<CatalogIdentifier[]> => {
+    await getWalmartAccessToken();
+    const items: CatalogIdentifier[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    let pages = 0;
+
+    do {
+      const raw = await walmartApi.getItems(cursor);
+      const page = (raw as any)?.payload ?? raw;
+
+      if (pages === 0) {
+        const sample = (page?.ItemResponse ?? page?.itemResponse ?? page?.items ?? page?.elements ?? [])[0];
+        console.log("[WFS:catalog] page0 keys:", Object.keys(page ?? {}).join(", "), "| sample item keys:", Object.keys(sample ?? {}).join(", "));
+      }
+
+      const list: any[] =
+        page?.ItemResponse ??
+        page?.itemResponse ??
+        page?.items ??
+        page?.elements ??
+        page?.list?.elements?.item ??
+        [];
+
+      for (const it of list) {
+        const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
+        if (!sku || seen.has(sku)) continue;
+        seen.add(sku);
+        items.push({
+          sku,
+          productName: String(it.productName ?? it.product_name ?? it.name ?? ""),
+          gtin: String(it.gtin ?? it.GTIN ?? ""),
+          upc: String(it.upc ?? it.UPC ?? it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ?? ""),
+        });
+      }
+
+      cursor =
+        page?.nextCursor ??
+        page?.meta?.nextCursor ??
+        page?.list?.meta?.nextCursor;
+      if (cursor && typeof cursor === "string" && cursor.startsWith("?")) {
+        // some endpoints return ?nextCursor=... — strip prefix to fit getItems signature
+        const u = new URLSearchParams(cursor.slice(1));
+        cursor = u.get("nextCursor") ?? undefined;
+      }
+      pages++;
+    } while (cursor && pages < MAX_PAGES_CATALOG);
+
+    console.log(`[WFS:catalog] done — pages: ${pages}, items: ${items.length}`);
+    return items.sort((a, b) => a.sku.localeCompare(b.sku));
+  }
+);
