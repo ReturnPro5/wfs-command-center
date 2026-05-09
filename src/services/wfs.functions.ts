@@ -346,6 +346,8 @@ interface RawOrder {
   qty: number;
   revenue: number;
   date: string;
+  purchaseOrderId: string;
+  lineNumber: string;
 }
 
 type InventoryAndOrdersResult = {
