@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Truck,
   AlertTriangle,
+  Barcode,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -18,6 +19,7 @@ const navItems = [
   { label: "Sales & Velocity", to: "/sales", icon: TrendingUp },
   { label: "Replenishment", to: "/replenishment", icon: RefreshCw },
   { label: "Inbound Shipments", to: "/inbound", icon: Truck },
+  { label: "Catalog Identifiers", to: "/catalog", icon: Barcode },
   { label: "Exceptions & Alerts", to: "/alerts", icon: AlertTriangle },
 ] as const;
 
