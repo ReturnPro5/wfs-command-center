@@ -116,23 +116,23 @@
 
 @layer components {
   .status-badge-healthy {
-    background-color: oklch(0.70 0.18 155 / 15%);
+    background-color: oklch(0.55 0.16 155 / 12%);
     color: var(--color-status-healthy);
-    border: 1px solid oklch(0.70 0.18 155 / 25%);
+    border: 1px solid oklch(0.55 0.16 155 / 25%);
   }
   .status-badge-warning {
-    background-color: oklch(0.78 0.16 80 / 15%);
-    color: var(--color-status-warning);
-    border: 1px solid oklch(0.78 0.16 80 / 25%);
+    background-color: oklch(0.65 0.16 70 / 14%);
+    color: oklch(0.45 0.14 70);
+    border: 1px solid oklch(0.65 0.16 70 / 28%);
   }
   .status-badge-critical {
-    background-color: oklch(0.60 0.22 25 / 15%);
+    background-color: oklch(0.58 0.22 25 / 12%);
     color: var(--color-status-critical);
-    border: 1px solid oklch(0.60 0.22 25 / 25%);
+    border: 1px solid oklch(0.58 0.22 25 / 25%);
   }
   .status-badge-info {
-    background-color: oklch(0.65 0.18 250 / 15%);
+    background-color: oklch(0.55 0.20 255 / 12%);
     color: var(--color-status-info);
-    border: 1px solid oklch(0.65 0.18 250 / 25%);
+    border: 1px solid oklch(0.55 0.20 255 / 25%);
   }
 }
