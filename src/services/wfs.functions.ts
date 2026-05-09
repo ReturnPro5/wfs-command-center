@@ -1189,11 +1189,8 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       page?.meta?.nextCursor ??
       page?.list?.meta?.nextCursor ??
       null;
-    if (nextCursor && typeof nextCursor === "string" && nextCursor.startsWith("?")) {
-      const u = new URLSearchParams(nextCursor.slice(1));
-      nextCursor = u.get("nextCursor");
-    }
-    // Treat "*", empty string, or an unchanged cursor as terminal.
+    // Treat "*", empty, or unchanged cursor as terminal. Keep the full querystring
+    // (with leading "?") intact — getItems appends it verbatim to /v3/items.
     if (nextCursor === "*" || nextCursor === "" || nextCursor === cursor) {
       nextCursor = null;
     }
