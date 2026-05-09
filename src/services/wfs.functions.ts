@@ -632,6 +632,9 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
       if (isWfsAtOrderLevel === null && isWfsAtLineLevel !== true) continue;
       if (isWfsAtLineLevel === false) continue;
 
+      const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
+      if (orderedQty <= 0 || isNaN(orderedQty)) continue;
+
       const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
       const cancelledQty = statuses
         .filter((s: any) => s.status === "Cancelled")
