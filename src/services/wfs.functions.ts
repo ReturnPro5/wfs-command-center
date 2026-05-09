@@ -290,8 +290,10 @@ async function fetchAllOrders(
   if (endDate && new Date(endDate) <= new Date(startDate)) return [];
 
   const orders: RawOrder[] = [];
+  const seen = new Set<string>(); // dedup by purchaseOrderId+lineNumber+sku
   let cursor: string | undefined;
   let pages = 0;
+  let dupesThisRun = 0;
   do {
     const raw = await walmartApi.getOrders({
       createdStartDate: startDate,
@@ -300,18 +302,25 @@ async function fetchAllOrders(
     });
     const page = (raw as any)?.payload ?? raw;
 
-    orders.push(...parseOrdersResponse(page, pages === 0));
+    const pageOrders = parseOrdersResponse(page, pages === 0);
+    let added = 0;
+    for (const o of pageOrders) {
+      const key = `${o.purchaseOrderId}|${o.lineNumber}|${o.sku}`;
+      if (seen.has(key)) {
+        dupesThisRun++;
+        continue;
+      }
+      seen.add(key);
+      orders.push(o);
+      added++;
+    }
+
     const nextCursor: string | undefined =
       page?.list?.meta?.nextCursor ?? page?.nextCursor ?? page?.meta?.nextCursor;
-    console.log(`[WFS] orders page ${pages} got ${parseOrdersResponse(page).length} lines, nextCursor present: ${!!nextCursor}, sameAsPrev: ${nextCursor === cursor}`);
-    // Break if cursor didn't advance (prevents infinite duplicate-page loops)
+    console.log(`[WFS] orders page ${pages}: ${pageOrders.length} lines, ${added} new, ${pageOrders.length - added} dupes`);
+
     if (nextCursor && nextCursor === cursor) {
-      console.warn(`[WFS] orders cursor did not advance — breaking pagination loop at page ${pages}`);
-      break;
-    }
-    // Break if cursor didn't advance (prevents infinite duplicate-page loops)
-    if (nextCursor && nextCursor === cursor) {
-      console.warn(`[WFS] orders cursor did not advance — breaking pagination loop at page ${pages}`);
+      console.warn(`[WFS] orders cursor did not advance — breaking at page ${pages}`);
       break;
     }
     cursor = nextCursor;
@@ -321,7 +330,7 @@ async function fetchAllOrders(
   const label = endDate
     ? `${startDate.slice(0, 10)}→${endDate.slice(0, 10)}`
     : `${startDate.slice(0, 10)}→now`;
-  console.log(`[WFS] orders window [${label}] — pages: ${pages}, line items: ${orders.length}, units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
+  console.log(`[WFS] orders window [${label}] — pages: ${pages}, unique lines: ${orders.length}, dupes filtered: ${dupesThisRun}, units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
   if (cursor) console.warn(`[WFS] Orders window [${label}] truncated after ${maxPages} pages`);
   return orders;
 }
