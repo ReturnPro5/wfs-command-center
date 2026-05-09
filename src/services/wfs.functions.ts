@@ -1109,7 +1109,7 @@ export interface CatalogIdentifier {
   upc: string;
 }
 
-const MAX_PAGES_CATALOG = 25;
+const MAX_PAGES_CATALOG = 100;
 
 export const getCatalogIdentifiers = createServerFn({ method: "GET" }).handler(
   async (): Promise<CatalogIdentifier[]> => {
