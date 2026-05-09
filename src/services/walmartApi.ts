@@ -99,6 +99,7 @@ export async function getOrders(params: {
   nextCursor?: string;
   limit?: number;
   status?: string;
+  shipNodeType?: "SellerFulfilled" | "WFSFulfilled" | "3PLFulfilled";
 }) {
   // Walmart returns nextCursor as a complete query string (e.g.
   //   "?limit=200&cursor=...&soIndex=...&poIndex=...&createdStartDate=...").
@@ -114,6 +115,7 @@ export async function getOrders(params: {
     limit: String(params.limit || 200),
     ...(params.createdEndDate ? { createdEndDate: params.createdEndDate } : {}),
     ...(params.status ? { status: params.status } : {}),
+    ...(params.shipNodeType ? { shipNodeType: params.shipNodeType } : {}),
   });
 
   return walmartFetch<any>(`/v3/orders?${searchParams}`);
