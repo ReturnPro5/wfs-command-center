@@ -922,16 +922,51 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
 }
 
 function parseInboundResponse(data: any): InboundShipment[] {
-  const shipments = data?.shipments ?? data?.elements ?? [];
-  return shipments.map((s: any) => ({
-    shipmentId: s.shipmentId ?? s.id ?? "",
-    status: s.status?.toLowerCase() ?? "created",
-    unitsShipped: s.totalUnitsShipped ?? s.unitsShipped ?? 0,
-    unitsReceived: s.totalUnitsReceived ?? s.unitsReceived ?? 0,
-    expectedArrival: s.expectedDeliveryDate ?? s.expectedArrival ?? "",
-    discrepancy: (s.totalUnitsShipped ?? 0) - (s.totalUnitsReceived ?? 0),
-    skus: (s.items ?? s.orderItems ?? []).map((i: any) => i.sku ?? ""),
-  }));
+  const payload = data?.payload ?? data;
+  const shipments: any[] =
+    payload?.inboundShipments ??
+    payload?.shipments ??
+    payload?.elements ??
+    payload?.data ??
+    payload?.list?.elements?.inboundShipment ??
+    payload?.list?.elements ??
+    (Array.isArray(payload) ? payload : []);
+
+  if (!Array.isArray(shipments) || shipments.length === 0) {
+    console.log(
+      "[WFS] inbound parse — no shipments. top keys:",
+      Object.keys(data ?? {}).join(","),
+      "| payload keys:",
+      Object.keys(payload ?? {}).join(",")
+    );
+    return [];
+  }
+
+  console.log(`[WFS] inbound parse — found ${shipments.length} shipment(s); sample keys: ${Object.keys(shipments[0] ?? {}).join(",")}`);
+
+  return shipments.map((s: any) => {
+    const items = s.items ?? s.orderItems ?? s.shipmentItems ?? s.inboundShipmentItems ?? [];
+    const unitsShipped =
+      s.totalUnitsShipped ??
+      s.unitsShipped ??
+      s.shippedQty ??
+      items.reduce((sum: number, i: any) => sum + Number(i.shippedQty ?? i.qty ?? i.quantity ?? 0), 0);
+    const unitsReceived =
+      s.totalUnitsReceived ??
+      s.unitsReceived ??
+      s.receivedQty ??
+      items.reduce((sum: number, i: any) => sum + Number(i.receivedQty ?? 0), 0);
+    return {
+      shipmentId: s.shipmentId ?? s.inboundShipmentId ?? s.id ?? s.inboundOrderId ?? "",
+      status: String(s.status ?? s.shipmentStatus ?? "created").toLowerCase(),
+      unitsShipped: Number(unitsShipped) || 0,
+      unitsReceived: Number(unitsReceived) || 0,
+      expectedArrival:
+        s.expectedDeliveryDate ?? s.estimatedDeliveryDate ?? s.expectedArrival ?? s.expectedArrivalDate ?? "",
+      discrepancy: (Number(unitsShipped) || 0) - (Number(unitsReceived) || 0),
+      skus: items.map((i: any) => i.sku ?? i.itemSku ?? "").filter(Boolean),
+    };
+  });
 }
 
 // ─── Aggregators ────────────────────────────────────────
