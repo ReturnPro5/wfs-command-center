@@ -424,8 +424,12 @@ async function fetchAllOrders(
   })();
 
   ordersCache.set(key, { ts: Date.now(), promise });
-  // If it rejects, evict so next call retries.
-  promise.catch(() => ordersCache.delete(key));
+  // Evict failures and empty results so transient issues / parser bugs don't
+  // pin a useless answer in cache for the full TTL window.
+  promise.then(
+    (r) => { if (r.length === 0) ordersCache.delete(key); },
+    () => ordersCache.delete(key),
+  );
   return promise;
 }
 
@@ -698,33 +702,34 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
     const lines = order.orderLines?.orderLine ?? order.lines ?? [];
     const rawDate = order.orderDate ?? order.createdDate ?? order.orderDateTime ?? order.createdAt ?? null;
 
-    // Log first 3 orders to diagnose date format
+    // Log first 3 orders to diagnose date + shipNode shape
     if (logSample && oi < 3) {
-      console.log(`[WFS] sample order[${oi}] rawDate=`, JSON.stringify(rawDate), "type=", typeof rawDate, "keys=", Object.keys(order).join(","));
+      console.log(`[WFS] sample order[${oi}] rawDate=`, JSON.stringify(rawDate), "shipNode=", JSON.stringify(order.shipNode), "firstLineFulfillment=", JSON.stringify((lines[0] as any)?.fulfillment));
     }
 
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
-    // WFS-only filter: check both order-level shipNode and line-level fulfillment.
-    // Walmart's WFS ship node type is "WFSFulfilled" (or contains "WFS").
+    // WFS / seller-fulfilled detection. Walmart's WFS ship node type is
+    // "WFSFulfilled" (or contains "WFS"/"FC"); seller-fulfilled values include
+    // "SellerFulfilled". Some payloads omit shipNode entirely — in that case we
+    // INCLUDE the line (revert to "include unless explicitly seller-fulfilled")
+    // so we don't silently drop every order.
     const orderShipNodeType: string | undefined =
-      order.shipNode?.type ?? order.shipNode?.shipNodeType;
-    const isWfsAtOrderLevel = orderShipNodeType
-      ? /WFS|FC/i.test(orderShipNodeType)
-      : null;
+      order.shipNode?.type ?? order.shipNode?.shipNodeType ?? order.shipNodeType;
+    const isSellerFulfilledAtOrderLevel = orderShipNodeType
+      ? /seller/i.test(orderShipNodeType) && !/WFS|FC/i.test(orderShipNodeType)
+      : false;
+
+    if (isSellerFulfilledAtOrderLevel) continue;
 
     for (const line of lines) {
       const lineShipNodeType: string | undefined =
-        line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType;
-      const isWfsAtLineLevel = lineShipNodeType
-        ? /WFS|FC/i.test(lineShipNodeType)
-        : null;
+        line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType ?? line.shipNodeType;
+      const isSellerFulfilledAtLineLevel = lineShipNodeType
+        ? /seller/i.test(lineShipNodeType) && !/WFS|FC/i.test(lineShipNodeType)
+        : false;
 
-      // Require WFS at either level. If neither has shipNode info, skip the line
-      // (we cannot confirm it is WFS, so exclude it from WFS metrics).
-      if (isWfsAtOrderLevel === false) continue;
-      if (isWfsAtOrderLevel === null && isWfsAtLineLevel !== true) continue;
-      if (isWfsAtLineLevel === false) continue;
+      if (isSellerFulfilledAtLineLevel) continue;
 
       const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
       if (orderedQty <= 0 || isNaN(orderedQty)) continue;
