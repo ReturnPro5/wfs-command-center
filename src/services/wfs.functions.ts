@@ -958,7 +958,7 @@ function parseInboundResponse(data: any): InboundShipment[] {
       items.reduce((sum: number, i: any) => sum + Number(i.receivedQty ?? 0), 0);
     return {
       shipmentId: s.shipmentId ?? s.inboundShipmentId ?? s.id ?? s.inboundOrderId ?? "",
-      status: String(s.status ?? s.shipmentStatus ?? "created").toLowerCase(),
+      status: normalizeShipmentStatus(s.status ?? s.shipmentStatus),
       unitsShipped: Number(unitsShipped) || 0,
       unitsReceived: Number(unitsReceived) || 0,
       expectedArrival:
