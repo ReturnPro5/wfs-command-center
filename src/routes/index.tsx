@@ -4,6 +4,7 @@ import { KpiCard } from "@/components/KpiCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { LoadingState, ErrorState } from "@/components/StateDisplays";
 import { YtdReconciliationPanel } from "@/components/YtdReconciliation";
+import { SalesDiagnosticsPanel } from "@/components/SalesDiagnosticsPanel";
 import { getOverview, getAlerts } from "@/services/wfs.functions";
 import {
   Package,
@@ -174,6 +175,7 @@ function OverviewPage() {
         )}
 
         <YtdReconciliationPanel />
+        <SalesDiagnosticsPanel />
 
         {/* Alerts Panel */}
         {alerts.data && alerts.data.length > 0 && (
