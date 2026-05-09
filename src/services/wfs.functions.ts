@@ -1205,7 +1205,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
     }
 
     console.log(
-      `[WFS:catalog] lifecycle=${lifecycle} returned ${items.length}, totalCount=${totalCount}, nextCursor=${nextCursor ? "yes" : "no"}`
+      `[WFS:catalog] lifecycle=${lifecycle} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, totalCount=${totalCount}, nextCursor=${nextCursor ? nextCursor.slice(0, 40) : "no"}, pageKeys=${Object.keys(page ?? {}).join(",")}`
     );
 
     return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
