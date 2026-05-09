@@ -108,20 +108,16 @@ export async function getOrders(params: {
   });
 
   // Walmart returns nextCursor as a full query string, e.g.
-  //   "?nextCursor=AoEpdmlyd...&limit=200" or just "AoEpdmlyd..."
-  // Extract the token and pass it as the `nextCursor` parameter.
+  //   "?limit=200&hasMoreElements=true&cursor=QW9KNCt...&soIndex=...&..."
+  // We must extract the `cursor` value AND preserve `soIndex`/`poIndex` paging
+  // markers, then forward them on the next request. Passing only `cursor` is
+  // insufficient — Walmart silently returns page 1 if the index params are missing.
   if (params.nextCursor) {
-    const raw = params.nextCursor;
-    let token: string | null = null;
-    const match = raw.match(/[?&]nextCursor=([^&]+)/);
-    if (match) {
-      token = decodeURIComponent(match[1]);
-    } else if (!raw.includes("=") && !raw.startsWith("?")) {
-      // Bare token
-      token = raw;
-    }
-    if (token) {
-      searchParams.set("nextCursor", token);
+    const raw = params.nextCursor.startsWith("?") ? params.nextCursor.slice(1) : params.nextCursor;
+    const cursorParams = new URLSearchParams(raw);
+    for (const key of ["cursor", "soIndex", "poIndex", "hasMoreElements"]) {
+      const v = cursorParams.get(key);
+      if (v) searchParams.set(key, v);
     }
   }
 
