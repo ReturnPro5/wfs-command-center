@@ -69,7 +69,7 @@ function InboundPage() {
             <option value="delivered">Delivered</option>
             <option value="receiving">Receiving</option>
             <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
+            
           </select>
         </div>
 
