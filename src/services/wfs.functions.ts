@@ -5,6 +5,7 @@
 
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import * as walmartApi from "@/services/walmartApi";
 import { getWalmartAccessToken } from "@/services/walmartAuth";
 import * as biz from "@/services/businessLogic";
