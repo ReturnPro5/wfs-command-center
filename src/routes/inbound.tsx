@@ -44,7 +44,8 @@ function InboundPage() {
     retry: 1,
   });
 
-  const filtered = data?.filter(
+  const visible = data?.filter((s) => s.status !== "cancelled");
+  const filtered = visible?.filter(
     (s) => statusFilter === "all" || s.status === statusFilter
   );
 
