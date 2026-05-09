@@ -199,7 +199,7 @@ export const getReplenishmentPlan = createServerFn({ method: "GET" }).handler(
 // ─── Inbound Shipments ──────────────────────────────────
 export const getInboundShipmentsList = createServerFn({ method: "GET" }).handler(
   async (): Promise<InboundShipment[]> => {
-    const data = await walmartApi.getInboundShipments();
+    const data = await fetchInboundShipmentsCached();
     return parseInboundResponse(data);
   }
 );
@@ -245,7 +245,7 @@ export const getSkuDetail = createServerFn({ method: "POST" })
     const [inventoryResult, ordersResult, inboundResult] = await Promise.allSettled([
       walmartApi.getInventoryForSku(sku),
       fetchAllOrders(daysAgo(30)),
-      walmartApi.getInboundShipments(),
+      fetchInboundShipmentsCached(),
     ]);
 
     if (inventoryResult.status === "rejected") {
@@ -299,39 +299,63 @@ type RawInventoryItem = {
 
 const MAX_PAGES_INVENTORY = 3;
 
+// Module-level dedupe + TTL cache for inventory and inbound shipments.
+// Multiple concurrent server fns (overview, inventory health, alerts, replenishment,
+// SKU detail) all need the same paginated payloads; without this they race and exhaust
+// the worker timeout (504 upstream timeouts).
+const INVENTORY_CACHE_TTL_MS = 3 * 60 * 1000;
+const INBOUND_CACHE_TTL_MS = 3 * 60 * 1000;
+
+let inventoryCache: { ts: number; promise: Promise<RawInventoryItem[]> } | null = null;
+let inboundCache: { ts: number; promise: Promise<any> } | null = null;
+
 async function fetchAllInventory(): Promise<RawInventoryItem[]> {
-  const items: RawInventoryItem[] = [];
-  let cursor: string | undefined;
-  let pages = 0;
-  do {
-    const raw = await walmartApi.getWfsInventory(cursor);
-    // Walmart wraps responses in { status, headers, payload } — unwrap if present
-    const page = (raw as any)?.payload ?? raw;
+  if (inventoryCache && Date.now() - inventoryCache.ts < INVENTORY_CACHE_TTL_MS) {
+    console.log("[WFS] inventory cache HIT");
+    return inventoryCache.promise;
+  }
 
-    if (pages === 0) {
-      const keys = Object.keys(raw ?? {});
-      const payloadKeys = (raw as any)?.payload ? Object.keys((raw as any).payload) : [];
-      const rawHeaders = (raw as any)?.headers ?? {};
-      const invVal = (page as any)?.inventory;
-      const invIsArray = Array.isArray(invVal);
-      const sample = invIsArray ? invVal[0] : (invVal?.elements ?? page?.elements ?? [])[0];
-      const sampleNode = (sample?.shipNodes ?? [])[0];
-      console.log("[WFS] inventory raw keys:", keys.join(", "), "| payload keys:", payloadKeys.join(", "));
-      console.log("[WFS] inventory headers:", JSON.stringify(rawHeaders));
-      console.log("[WFS] inventory is array:", invIsArray, "| count:", invIsArray ? invVal.length : 0, "| sample item keys:", Object.keys(sample ?? {}).join(", "));
-      if (sampleNode) {
-        console.log("[WFS] sample shipNode:", JSON.stringify(sampleNode));
+  const promise = (async () => {
+    const items: RawInventoryItem[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const raw = await walmartApi.getWfsInventory(cursor);
+      const page = (raw as any)?.payload ?? raw;
+
+      if (pages === 0) {
+        const keys = Object.keys(raw ?? {});
+        const payloadKeys = (raw as any)?.payload ? Object.keys((raw as any).payload) : [];
+        const invVal = (page as any)?.inventory;
+        const invIsArray = Array.isArray(invVal);
+        const sample = invIsArray ? invVal[0] : (invVal?.elements ?? page?.elements ?? [])[0];
+        console.log("[WFS] inventory raw keys:", keys.join(", "), "| payload keys:", payloadKeys.join(", "));
+        console.log("[WFS] inventory is array:", invIsArray, "| count:", invIsArray ? invVal.length : 0, "| sample item keys:", Object.keys(sample ?? {}).join(", "));
       }
-    }
 
-    items.push(...parseInventoryResponse(page));
-    // Cursor may be in payload body or in the response headers envelope
-    cursor = (page as any)?.nextCursor ?? (raw as any)?.headers?.nextCursor ?? (raw as any)?.headers?.["WM_NEXT_CURSOR"];
-    pages++;
-  } while (cursor && pages < MAX_PAGES_INVENTORY);
-  console.log(`[WFS] fetchAllInventory done — pages: ${pages}, items: ${items.length}`);
-  if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES_INVENTORY} pages (${items.length} items)`);
-  return items;
+      items.push(...parseInventoryResponse(page));
+      cursor = (page as any)?.nextCursor ?? (raw as any)?.headers?.nextCursor ?? (raw as any)?.headers?.["WM_NEXT_CURSOR"];
+      pages++;
+    } while (cursor && pages < MAX_PAGES_INVENTORY);
+    console.log(`[WFS] fetchAllInventory done — pages: ${pages}, items: ${items.length}`);
+    if (cursor) console.warn(`[WFS] Inventory truncated after ${MAX_PAGES_INVENTORY} pages (${items.length} items)`);
+    return items;
+  })();
+
+  inventoryCache = { ts: Date.now(), promise };
+  promise.catch(() => { inventoryCache = null; });
+  return promise;
+}
+
+async function fetchInboundShipmentsCached(): Promise<any> {
+  if (inboundCache && Date.now() - inboundCache.ts < INBOUND_CACHE_TTL_MS) {
+    console.log("[WFS] inbound cache HIT");
+    return inboundCache.promise;
+  }
+  const promise = walmartApi.getInboundShipments();
+  inboundCache = { ts: Date.now(), promise };
+  promise.catch(() => { inboundCache = null; });
+  return promise;
 }
 
 // Fetch a bounded window of orders (start to optional end), up to maxPages pages.
