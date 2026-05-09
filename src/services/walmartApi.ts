@@ -153,7 +153,12 @@ export async function getInboundShipment(shipmentId: string) {
 
 // ─── Items / Catalog ────────────────────────────────────
 export async function getItems(nextCursor?: string) {
-  const params = new URLSearchParams({ limit: "200" });
+  const params = new URLSearchParams({
+    limit: "200",
+    // Return the entire catalog regardless of WFS conversion / publish state.
+    lifecycleStatus: "ACTIVE,RETIRED,ARCHIVED",
+    publishedStatus: "PUBLISHED,UNPUBLISHED,IN_PROGRESS,STAGE,SYSTEM_PROBLEM,READY_TO_PUBLISH",
+  });
   if (nextCursor) params.set("nextCursor", nextCursor);
   return walmartFetch<any>(`/v3/items?${params}`);
 }
