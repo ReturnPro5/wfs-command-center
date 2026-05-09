@@ -135,7 +135,163 @@ export const getYtdReconciliation = createServerFn({ method: "GET" }).handler(
   }
 );
 
-// ─── Inventory ──────────────────────────────────────────
+// ─── Sales Diagnostics ──────────────────────────────────
+export type SalesDiagnosticReason =
+  | "included"
+  | "excluded:order-seller-fulfilled"
+  | "excluded:line-seller-fulfilled"
+  | "excluded:zero-or-cancelled-qty"
+  | "excluded:missing-sku";
+
+export interface SalesDiagnosticLine {
+  reason: SalesDiagnosticReason;
+  purchaseOrderId: string;
+  lineNumber: string;
+  sku: string;
+  productName: string;
+  qty: number;
+  revenue: number;
+  date: string;
+  orderShipNode: unknown;
+  lineFulfillment: unknown;
+}
+
+export interface SalesDiagnostics {
+  windowStart: string;
+  totalOrdersFetched: number;
+  totalLinesSeen: number;
+  counts: Record<SalesDiagnosticReason, number>;
+  unitsIncluded: number;
+  revenueIncluded: number;
+  samples: Record<SalesDiagnosticReason, SalesDiagnosticLine[]>;
+}
+
+export const getSalesDiagnostics = createServerFn({ method: "GET" }).handler(
+  async (): Promise<SalesDiagnostics> => {
+    await getWalmartAccessToken();
+
+    const startDate = startOfYear();
+    const rawOrders: any[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    const MAX_PAGES = 20;
+    do {
+      const raw = await walmartApi.getOrders({
+        createdStartDate: startDate,
+        nextCursor: cursor,
+      });
+      const page = (raw as any)?.payload ?? raw;
+      const orderList = page?.list?.elements?.order ?? page?.orders ?? page?.elements ?? [];
+      rawOrders.push(...orderList);
+      const nextCursor: string | undefined =
+        page?.list?.meta?.nextCursor ?? page?.nextCursor ?? page?.meta?.nextCursor;
+      if (nextCursor && nextCursor === cursor) break;
+      cursor = nextCursor;
+      pages++;
+    } while (cursor && pages < MAX_PAGES);
+
+    const counts: Record<SalesDiagnosticReason, number> = {
+      "included": 0,
+      "excluded:order-seller-fulfilled": 0,
+      "excluded:line-seller-fulfilled": 0,
+      "excluded:zero-or-cancelled-qty": 0,
+      "excluded:missing-sku": 0,
+    };
+    const samples: Record<SalesDiagnosticReason, SalesDiagnosticLine[]> = {
+      "included": [],
+      "excluded:order-seller-fulfilled": [],
+      "excluded:line-seller-fulfilled": [],
+      "excluded:zero-or-cancelled-qty": [],
+      "excluded:missing-sku": [],
+    };
+    const SAMPLE_LIMIT = 25;
+    let totalLines = 0;
+    let unitsIncluded = 0;
+    let revenueIncluded = 0;
+
+    for (const order of rawOrders) {
+      const lines = order.orderLines?.orderLine ?? order.lines ?? [];
+      const rawDate = order.orderDate ?? order.createdDate ?? order.orderDateTime ?? null;
+      const date = (() => {
+        try {
+          const ms = typeof rawDate === "number" && rawDate < 1e12 ? rawDate * 1000 : rawDate;
+          return new Date(ms).toISOString().slice(0, 10);
+        } catch { return ""; }
+      })();
+      const orderShipNode = order.shipNode ?? null;
+      const orderShipNodeType: string | undefined =
+        order.shipNode?.type ?? order.shipNode?.shipNodeType ?? order.shipNodeType;
+      const orderSellerFulfilled = orderShipNodeType
+        ? /seller/i.test(orderShipNodeType) && !/WFS|FC/i.test(orderShipNodeType)
+        : false;
+
+      for (const line of lines) {
+        totalLines++;
+        const lineFulfillment = line.fulfillment ?? null;
+        const lineShipNodeType: string | undefined =
+          line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType ?? line.shipNodeType;
+        const lineSellerFulfilled = lineShipNodeType
+          ? /seller/i.test(lineShipNodeType) && !/WFS|FC/i.test(lineShipNodeType)
+          : false;
+
+        const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
+        const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
+        const cancelledQty = statuses
+          .filter((s: any) => s.status === "Cancelled")
+          .reduce((sum: number, s: any) => sum + Number(s.statusQuantity?.amount ?? 0), 0);
+        const qty = Math.max(0, orderedQty - cancelledQty);
+
+        const charges: any[] = line.charges?.charge ?? [];
+        const productCharge =
+          charges.find((c: any) => c.chargeType === "PRODUCT" || c.chargeName === "ItemPrice") ??
+          charges[0];
+        const revenue = Number(productCharge?.chargeAmount?.amount ?? line.price ?? 0);
+
+        const sku = line.item?.sku ?? line.sku ?? "";
+        const productName = line.item?.productName ?? line.productName ?? "";
+
+        let reason: SalesDiagnosticReason = "included";
+        if (orderSellerFulfilled) reason = "excluded:order-seller-fulfilled";
+        else if (lineSellerFulfilled) reason = "excluded:line-seller-fulfilled";
+        else if (qty <= 0) reason = "excluded:zero-or-cancelled-qty";
+        else if (!sku) reason = "excluded:missing-sku";
+
+        counts[reason]++;
+        if (reason === "included") {
+          unitsIncluded += qty;
+          revenueIncluded += revenue;
+        }
+
+        const bucket = samples[reason];
+        if (bucket.length < SAMPLE_LIMIT) {
+          bucket.push({
+            reason,
+            purchaseOrderId: String(order.purchaseOrderId ?? order.customerOrderId ?? ""),
+            lineNumber: String(line.lineNumber ?? line.orderLineNumber ?? ""),
+            sku,
+            productName,
+            qty,
+            revenue,
+            date,
+            orderShipNode,
+            lineFulfillment,
+          });
+        }
+      }
+    }
+
+    return {
+      windowStart: startDate,
+      totalOrdersFetched: rawOrders.length,
+      totalLinesSeen: totalLines,
+      counts,
+      unitsIncluded,
+      revenueIncluded,
+      samples,
+    };
+  }
+);
+
 export const getInventoryHealth = createServerFn({ method: "GET" }).handler(
   async (): Promise<InventoryItem[]> => {
     const { inventory, orders } = await loadInventoryAndOrders("inventory");
