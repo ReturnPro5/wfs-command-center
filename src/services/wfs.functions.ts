@@ -638,6 +638,8 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
         qty,
         revenue,
         date: normalizedOrderDate,
+        purchaseOrderId: String(order.purchaseOrderId ?? order.customerOrderId ?? ""),
+        lineNumber: String(line.lineNumber ?? line.orderLineNumber ?? ""),
       });
     }
   }
