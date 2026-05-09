@@ -921,6 +921,16 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
   return result;
 }
 
+function normalizeShipmentStatus(raw: any): InboundShipment["status"] {
+  const s = String(raw ?? "").toLowerCase().replace(/_/g, "-");
+  if (s.includes("cancel")) return "cancelled";
+  if (s.includes("complet") || s === "received") return "completed";
+  if (s.includes("receiv")) return "receiving";
+  if (s.includes("deliver")) return "delivered";
+  if (s.includes("transit") || s === "shipped") return "in-transit";
+  return "created";
+}
+
 function parseInboundResponse(data: any): InboundShipment[] {
   const payload = data?.payload ?? data;
   const shipments: any[] =
