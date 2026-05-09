@@ -199,7 +199,7 @@ export const getReplenishmentPlan = createServerFn({ method: "GET" }).handler(
 // ─── Inbound Shipments ──────────────────────────────────
 export const getInboundShipmentsList = createServerFn({ method: "GET" }).handler(
   async (): Promise<InboundShipment[]> => {
-    const data = await walmartApi.getInboundShipments();
+    const data = await fetchInboundShipmentsCached();
     return parseInboundResponse(data);
   }
 );
