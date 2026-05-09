@@ -80,6 +80,61 @@ export const getOverview = createServerFn({ method: "GET" }).handler(
   }
 );
 
+// ─── YTD Reconciliation ─────────────────────────────────
+export interface YtdOrderLine {
+  sku: string;
+  productName: string;
+  qty: number;
+  revenue: number;
+  date: string;
+  purchaseOrderId: string;
+  lineNumber: string;
+}
+
+export interface YtdReconciliation {
+  totals: { units: number; revenue: number };
+  bySku: Array<{ sku: string; productName: string; units: number; revenue: number }>;
+  byMonth: Array<{ month: string; units: number; revenue: number }>;
+  lines: YtdOrderLine[];
+}
+
+export const getYtdReconciliation = createServerFn({ method: "GET" }).handler(
+  async (): Promise<YtdReconciliation> => {
+    await getWalmartAccessToken();
+    const orders = await fetchAllOrders(startOfYear(), 20);
+
+    const bySkuMap = new Map<string, { sku: string; productName: string; units: number; revenue: number }>();
+    const byMonthMap = new Map<string, { units: number; revenue: number }>();
+    let totalUnits = 0;
+    let totalRevenue = 0;
+
+    for (const o of orders) {
+      totalUnits += o.qty;
+      totalRevenue += o.revenue;
+
+      const skuRow = bySkuMap.get(o.sku) ?? { sku: o.sku, productName: o.productName, units: 0, revenue: 0 };
+      skuRow.units += o.qty;
+      skuRow.revenue += o.revenue;
+      bySkuMap.set(o.sku, skuRow);
+
+      const month = o.date.slice(0, 7);
+      const m = byMonthMap.get(month) ?? { units: 0, revenue: 0 };
+      m.units += o.qty;
+      m.revenue += o.revenue;
+      byMonthMap.set(month, m);
+    }
+
+    return {
+      totals: { units: totalUnits, revenue: totalRevenue },
+      bySku: [...bySkuMap.values()].sort((a, b) => b.revenue - a.revenue),
+      byMonth: [...byMonthMap.entries()]
+        .map(([month, v]) => ({ month, ...v }))
+        .sort((a, b) => a.month.localeCompare(b.month)),
+      lines: orders.sort((a, b) => b.date.localeCompare(a.date)),
+    };
+  }
+);
+
 // ─── Inventory ──────────────────────────────────────────
 export const getInventoryHealth = createServerFn({ method: "GET" }).handler(
   async (): Promise<InventoryItem[]> => {
