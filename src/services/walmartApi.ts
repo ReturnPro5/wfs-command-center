@@ -126,13 +126,21 @@ export async function getOrder(purchaseOrderId: string) {
 }
 
 // ─── Inbound Shipments (WFS) ────────────────────────────
+// Walmart requires `fromCreatedDate` for this endpoint; default to a wide
+// rolling window so we don't silently return empty.
 export async function getInboundShipments(params?: {
   status?: string;
   nextCursor?: string;
   limit?: number;
+  fromCreatedDate?: string;
+  toCreatedDate?: string;
 }) {
+  const fromDefault = new Date();
+  fromDefault.setDate(fromDefault.getDate() - 180);
   const searchParams = new URLSearchParams({
     limit: String(params?.limit || 50),
+    fromCreatedDate: params?.fromCreatedDate || fromDefault.toISOString(),
+    ...(params?.toCreatedDate ? { toCreatedDate: params.toCreatedDate } : {}),
     ...(params?.status ? { status: params.status } : {}),
     ...(params?.nextCursor ? { nextCursor: params.nextCursor } : {}),
   });
