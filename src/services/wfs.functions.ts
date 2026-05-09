@@ -1109,76 +1109,97 @@ export interface CatalogIdentifier {
   upc: string;
 }
 
-const MAX_PAGES_CATALOG = 100;
+export interface CatalogPage {
+  items: CatalogIdentifier[];
+  nextCursor: string | null;
+  totalCount: number | null;
+  lifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED";
+  nextLifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED" | null;
+}
 
-export const getCatalogIdentifiers = createServerFn({ method: "GET" }).handler(
-  async (): Promise<CatalogIdentifier[]> => {
+const LIFECYCLE_ORDER: Array<"ACTIVE" | "ARCHIVED" | "RETIRED"> = ["ACTIVE", "ARCHIVED", "RETIRED"];
+
+// Returns a single page of catalog items. The client paginates by feeding
+// nextCursor / nextLifecycle back in, so we never blow the worker timeout
+// even on catalogs with hundreds of thousands of SKUs.
+export const getCatalogPage = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        cursor: z.string().nullable().optional(),
+        lifecycle: z.enum(["ACTIVE", "ARCHIVED", "RETIRED"]).optional(),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }): Promise<CatalogPage> => {
     await getWalmartAccessToken();
-    const items: CatalogIdentifier[] = [];
-    const seen = new Set<string>();
+    const lifecycle = data.lifecycle ?? "ACTIVE";
+    const cursor = data.cursor ?? undefined;
 
-    // Walmart's /v3/items only accepts a single lifecycleStatus value per call
-    // and defaults to ACTIVE. To return the entire catalog (not just live items),
-    // paginate each lifecycle bucket separately and merge.
-    const lifecycles: (string | undefined)[] = [undefined, "ARCHIVED", "RETIRED"];
-
-    for (const lifecycle of lifecycles) {
-      let cursor: string | undefined;
-      let pages = 0;
-      try {
-        do {
-          const raw = await walmartApi.getItems(cursor, lifecycle);
-          const page = (raw as any)?.payload ?? raw;
-
-          if (pages === 0) {
-            const sample = (page?.ItemResponse ?? page?.itemResponse ?? page?.items ?? page?.elements ?? [])[0];
-            console.log(`[WFS:catalog] lifecycle=${lifecycle ?? "ACTIVE"} page0 keys:`, Object.keys(page ?? {}).join(", "), "| sample keys:", Object.keys(sample ?? {}).join(", "));
-          }
-
-          const list: any[] =
-            page?.ItemResponse ??
-            page?.itemResponse ??
-            page?.items ??
-            page?.elements ??
-            page?.list?.elements?.item ??
-            [];
-
-          for (const it of list) {
-            const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
-            if (!sku || seen.has(sku)) continue;
-            seen.add(sku);
-            items.push({
-              sku,
-              productName: String(it.productName ?? it.product_name ?? it.name ?? ""),
-              gtin: String(it.gtin ?? it.GTIN ?? ""),
-              upc: String(it.upc ?? it.UPC ?? it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ?? ""),
-            });
-          }
-
-          cursor =
-            page?.nextCursor ??
-            page?.meta?.nextCursor ??
-            page?.list?.meta?.nextCursor;
-          if (cursor && typeof cursor === "string" && cursor.startsWith("?")) {
-            const u = new URLSearchParams(cursor.slice(1));
-            cursor = u.get("nextCursor") ?? undefined;
-          }
-          pages++;
-        } while (cursor && pages < MAX_PAGES_CATALOG);
-      } catch (err) {
-        // Walmart returns 404 CONTENT_NOT_FOUND when a bucket has no items —
-        // that's not an error, just skip it.
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) {
-          console.log(`[WFS:catalog] lifecycle=${lifecycle ?? "ACTIVE"} returned no items (404)`);
-          continue;
-        }
-        throw err;
+    let raw: any;
+    try {
+      raw = await walmartApi.getItems(cursor, lifecycle);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) {
+        const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
+        return {
+          items: [],
+          nextCursor: null,
+          totalCount: null,
+          lifecycle,
+          nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null,
+        };
       }
-      console.log(`[WFS:catalog] lifecycle=${lifecycle ?? "ACTIVE"} done — pages: ${pages}, total so far: ${items.length}`);
+      throw err;
     }
 
-    console.log(`[WFS:catalog] done — total items: ${items.length}`);
-    return items.sort((a, b) => a.sku.localeCompare(b.sku));
-  }
-);
+    const page = (raw as any)?.payload ?? raw;
+    const list: any[] =
+      page?.ItemResponse ??
+      page?.itemResponse ??
+      page?.items ??
+      page?.elements ??
+      page?.list?.elements?.item ??
+      [];
+
+    const items: CatalogIdentifier[] = list
+      .map((it: any) => ({
+        sku: String(it.sku ?? it.SKU ?? it.mart_sku ?? ""),
+        productName: String(it.productName ?? it.product_name ?? it.name ?? ""),
+        gtin: String(it.gtin ?? it.GTIN ?? ""),
+        upc: String(
+          it.upc ??
+            it.UPC ??
+            it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
+            ""
+        ),
+      }))
+      .filter((i) => i.sku);
+
+    let nextCursor: string | null =
+      page?.nextCursor ?? page?.meta?.nextCursor ?? page?.list?.meta?.nextCursor ?? null;
+    if (nextCursor && typeof nextCursor === "string" && nextCursor.startsWith("?")) {
+      const u = new URLSearchParams(nextCursor.slice(1));
+      nextCursor = u.get("nextCursor");
+    }
+
+    const totalCount: number | null =
+      page?.totalItems ??
+      page?.totalCount ??
+      page?.meta?.totalCount ??
+      page?.list?.meta?.totalCount ??
+      null;
+
+    let nextLifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED" | null = null;
+    if (!nextCursor) {
+      const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
+      nextLifecycle = LIFECYCLE_ORDER[idx + 1] ?? null;
+    }
+
+    console.log(
+      `[WFS:catalog] lifecycle=${lifecycle} returned ${items.length}, nextCursor=${nextCursor ? "yes" : "no"}, totalCount=${totalCount}`
+    );
+
+    return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
+  });
