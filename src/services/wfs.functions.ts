@@ -336,58 +336,73 @@ async function fetchAllInventory(): Promise<RawInventoryItem[]> {
 
 // Fetch a bounded window of orders (start to optional end), up to maxPages pages.
 // Walmart returns newest-first within each window, so narrower windows = better coverage.
+//
+// Module-level cache: multiple server fns (overview, alerts, reconciliation) often
+// request the same YTD window within seconds of each other. Without this, they each
+// re-paginate ~20 pages and concurrently exhaust the worker timeout (504s).
+const ORDERS_CACHE_TTL_MS = 3 * 60 * 1000;
+const ordersCache = new Map<string, { ts: number; promise: Promise<RawOrder[]> }>();
+
 async function fetchAllOrders(
   startDate: string,
   maxPages = 12,
   endDate?: string
 ): Promise<RawOrder[]> {
-  // Skip impossible windows
   if (endDate && new Date(endDate) <= new Date(startDate)) return [];
 
-  const orders: RawOrder[] = [];
-  const seen = new Set<string>(); // dedup by purchaseOrderId+lineNumber+sku
-  let cursor: string | undefined;
-  let pages = 0;
-  let dupesThisRun = 0;
-  do {
-    const raw = await walmartApi.getOrders({
-      createdStartDate: startDate,
-      ...(endDate ? { createdEndDate: endDate } : {}),
-      nextCursor: cursor,
-    });
-    const page = (raw as any)?.payload ?? raw;
+  const key = `${startDate}|${endDate ?? ""}|${maxPages}`;
+  const cached = ordersCache.get(key);
+  if (cached && Date.now() - cached.ts < ORDERS_CACHE_TTL_MS) {
+    console.log(`[WFS] orders cache HIT ${key}`);
+    return cached.promise;
+  }
 
-    const pageOrders = parseOrdersResponse(page, pages === 0);
-    let added = 0;
-    for (const o of pageOrders) {
-      const key = `${o.purchaseOrderId}|${o.lineNumber}|${o.sku}`;
-      if (seen.has(key)) {
-        dupesThisRun++;
-        continue;
+  const promise = (async () => {
+    const orders: RawOrder[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    let pages = 0;
+    let dupesThisRun = 0;
+    do {
+      const raw = await walmartApi.getOrders({
+        createdStartDate: startDate,
+        ...(endDate ? { createdEndDate: endDate } : {}),
+        nextCursor: cursor,
+      });
+      const page = (raw as any)?.payload ?? raw;
+
+      const pageOrders = parseOrdersResponse(page, pages === 0);
+      let added = 0;
+      for (const o of pageOrders) {
+        const k = `${o.purchaseOrderId}|${o.lineNumber}|${o.sku}`;
+        if (seen.has(k)) { dupesThisRun++; continue; }
+        seen.add(k);
+        orders.push(o);
+        added++;
       }
-      seen.add(key);
-      orders.push(o);
-      added++;
-    }
 
-    const nextCursor: string | undefined =
-      page?.list?.meta?.nextCursor ?? page?.nextCursor ?? page?.meta?.nextCursor;
-    console.log(`[WFS] orders page ${pages}: ${pageOrders.length} lines, ${added} new, ${pageOrders.length - added} dupes`);
+      const nextCursor: string | undefined =
+        page?.list?.meta?.nextCursor ?? page?.nextCursor ?? page?.meta?.nextCursor;
+      console.log(`[WFS] orders page ${pages}: ${pageOrders.length} lines, ${added} new, ${pageOrders.length - added} dupes`);
 
-    if (nextCursor && nextCursor === cursor) {
-      console.warn(`[WFS] orders cursor did not advance — breaking at page ${pages}`);
-      break;
-    }
-    cursor = nextCursor;
-    pages++;
-  } while (cursor && pages < maxPages);
+      if (nextCursor && nextCursor === cursor) {
+        console.warn(`[WFS] orders cursor did not advance — breaking at page ${pages}`);
+        break;
+      }
+      cursor = nextCursor;
+      pages++;
+    } while (cursor && pages < maxPages);
 
-  const label = endDate
-    ? `${startDate.slice(0, 10)}→${endDate.slice(0, 10)}`
-    : `${startDate.slice(0, 10)}→now`;
-  console.log(`[WFS] orders window [${label}] — pages: ${pages}, unique lines: ${orders.length}, dupes filtered: ${dupesThisRun}, units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
-  if (cursor) console.warn(`[WFS] Orders window [${label}] truncated after ${maxPages} pages`);
-  return orders;
+    const label = endDate ? `${startDate.slice(0, 10)}→${endDate.slice(0, 10)}` : `${startDate.slice(0, 10)}→now`;
+    console.log(`[WFS] orders window [${label}] — pages: ${pages}, unique lines: ${orders.length}, dupes filtered: ${dupesThisRun}, units: ${orders.reduce((s, o) => s + o.qty, 0)}`);
+    if (cursor) console.warn(`[WFS] Orders window [${label}] truncated after ${maxPages} pages`);
+    return orders;
+  })();
+
+  ordersCache.set(key, { ts: Date.now(), promise });
+  // If it rejects, evict so next call retries.
+  promise.catch(() => ordersCache.delete(key));
+  return promise;
 }
 
 // ─── Date Helpers ────────────────────────────────────────
