@@ -424,8 +424,12 @@ async function fetchAllOrders(
   })();
 
   ordersCache.set(key, { ts: Date.now(), promise });
-  // If it rejects, evict so next call retries.
-  promise.catch(() => ordersCache.delete(key));
+  // Evict failures and empty results so transient issues / parser bugs don't
+  // pin a useless answer in cache for the full TTL window.
+  promise.then(
+    (r) => { if (r.length === 0) ordersCache.delete(key); },
+    () => ordersCache.delete(key),
+  );
   return promise;
 }
 
