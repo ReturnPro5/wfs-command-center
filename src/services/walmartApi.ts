@@ -107,12 +107,21 @@ export async function getOrders(params: {
     ...(params.status ? { status: params.status } : {}),
   });
 
-  // Walmart returns nextCursor as a full query string "?limit=200&cursor=ABC&...".
-  // Extract the actual cursor token and pass it as the `cursor` parameter.
+  // Walmart returns nextCursor as a full query string, e.g.
+  //   "?nextCursor=AoEpdmlyd...&limit=200" or just "AoEpdmlyd..."
+  // Extract the token and pass it as the `nextCursor` parameter.
   if (params.nextCursor) {
-    const cursorMatch = params.nextCursor.match(/[?&]cursor=([^&]+)/);
-    if (cursorMatch) {
-      searchParams.set("cursor", decodeURIComponent(cursorMatch[1]));
+    const raw = params.nextCursor;
+    let token: string | null = null;
+    const match = raw.match(/[?&]nextCursor=([^&]+)/);
+    if (match) {
+      token = decodeURIComponent(match[1]);
+    } else if (!raw.includes("=") && !raw.startsWith("?")) {
+      // Bare token
+      token = raw;
+    }
+    if (token) {
+      searchParams.set("nextCursor", token);
     }
   }
 
