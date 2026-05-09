@@ -611,21 +611,26 @@ function parseOrdersResponse(data: any, logSample = false): RawOrder[] {
 
     const normalizedOrderDate = normalizeOrderDate(rawDate);
 
-    for (const line of lines) {
-      // WFS-only: skip seller-fulfilled and drop-ship lines.
-      const shipNodeType: string | undefined =
-        line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType;
-      if (
-        shipNodeType &&
-        shipNodeType !== "FC" &&
-        shipNodeType !== "WFS" &&
-        shipNodeType !== "WMFS"
-      ) {
-        continue;
-      }
+    // WFS-only filter: check both order-level shipNode and line-level fulfillment.
+    // Walmart's WFS ship node type is "WFSFulfilled" (or contains "WFS").
+    const orderShipNodeType: string | undefined =
+      order.shipNode?.type ?? order.shipNode?.shipNodeType;
+    const isWfsAtOrderLevel = orderShipNodeType
+      ? /WFS|FC/i.test(orderShipNodeType)
+      : null;
 
-      const orderedQty = Number(line.orderLineQuantity?.amount ?? line.quantity ?? 1);
-      if (orderedQty <= 0 || isNaN(orderedQty)) continue;
+    for (const line of lines) {
+      const lineShipNodeType: string | undefined =
+        line.fulfillment?.shipNode?.type ?? line.fulfillment?.fulfillmentType;
+      const isWfsAtLineLevel = lineShipNodeType
+        ? /WFS|FC/i.test(lineShipNodeType)
+        : null;
+
+      // Require WFS at either level. If neither has shipNode info, skip the line
+      // (we cannot confirm it is WFS, so exclude it from WFS metrics).
+      if (isWfsAtOrderLevel === false) continue;
+      if (isWfsAtOrderLevel === null && isWfsAtLineLevel !== true) continue;
+      if (isWfsAtLineLevel === false) continue;
 
       const statuses: any[] = line.orderLineStatuses?.orderLineStatus ?? [];
       const cancelledQty = statuses
