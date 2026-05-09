@@ -175,6 +175,7 @@ function OverviewPage() {
         )}
 
         <YtdReconciliationPanel />
+        <SalesDiagnosticsPanel />
 
         {/* Alerts Panel */}
         {alerts.data && alerts.data.length > 0 && (
