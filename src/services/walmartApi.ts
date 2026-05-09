@@ -152,15 +152,12 @@ export async function getInboundShipment(shipmentId: string) {
 }
 
 // ─── Items / Catalog ────────────────────────────────────
-export async function getItems(
-  nextCursor?: string,
-  lifecycleStatus?: string,
-  offset?: number,
-) {
+export async function getItems(nextCursor?: string, lifecycleStatus?: string) {
   const params = new URLSearchParams({ limit: "200" });
   if (lifecycleStatus) params.set("lifecycleStatus", lifecycleStatus);
-  if (nextCursor) params.set("nextCursor", nextCursor);
-  if (typeof offset === "number" && offset > 0) params.set("offset", String(offset));
+  // Walmart only returns `nextCursor` in the response when you pass one on the
+  // way in. Use "*" on the first call to opt into cursor-based pagination.
+  params.set("nextCursor", nextCursor && nextCursor.length > 0 ? nextCursor : "*");
   return walmartFetch<any>(`/v3/items?${params}`);
 }
 

@@ -1111,27 +1111,22 @@ export interface CatalogIdentifier {
 
 export interface CatalogPage {
   items: CatalogIdentifier[];
-  nextOffset: number | null;
+  nextCursor: string | null;
   totalCount: number | null;
   lifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED";
   nextLifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED" | null;
 }
 
 const LIFECYCLE_ORDER: Array<"ACTIVE" | "ARCHIVED" | "RETIRED"> = ["ACTIVE", "ARCHIVED", "RETIRED"];
-const CATALOG_PAGE_SIZE = 200;
 
-// Returns a single page of catalog items. The client paginates by feeding
-// nextOffset / nextLifecycle back in, so we never blow the worker timeout
-// even on catalogs with hundreds of thousands of SKUs.
-//
-// Walmart's /v3/items endpoint does NOT return nextCursor — it returns only
-// `totalItems` and `ItemResponse[]`. Pagination must be driven by the
-// `offset` query parameter.
+// Walmart's /v3/items uses cursor-based pagination. Offset is capped at 10,000.
+// You must pass `nextCursor=*` on the first call to opt into cursor mode and
+// receive a real `nextCursor` back in the response.
 export const getCatalogPage = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
     z
       .object({
-        offset: z.number().int().nonnegative().optional(),
+        cursor: z.string().nullable().optional(),
         lifecycle: z.enum(["ACTIVE", "ARCHIVED", "RETIRED"]).optional(),
       })
       .parse(data)
@@ -1139,18 +1134,18 @@ export const getCatalogPage = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<CatalogPage> => {
     await getWalmartAccessToken();
     const lifecycle = data.lifecycle ?? "ACTIVE";
-    const offset = data.offset ?? 0;
+    const cursor = data.cursor ?? "*"; // "*" = first page in cursor mode
 
     let raw: any;
     try {
-      raw = await walmartApi.getItems(undefined, lifecycle, offset);
+      raw = await walmartApi.getItems(cursor, lifecycle);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) {
         const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
         return {
           items: [],
-          nextOffset: null,
+          nextCursor: null,
           totalCount: null,
           lifecycle,
           nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null,
@@ -1189,21 +1184,29 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       page?.list?.meta?.totalCount ??
       null;
 
-    const newOffset = offset + items.length;
-    const moreInBucket =
-      items.length === CATALOG_PAGE_SIZE &&
-      (totalCount == null || newOffset < totalCount);
+    let nextCursor: string | null =
+      page?.nextCursor ??
+      page?.meta?.nextCursor ??
+      page?.list?.meta?.nextCursor ??
+      null;
+    if (nextCursor && typeof nextCursor === "string" && nextCursor.startsWith("?")) {
+      const u = new URLSearchParams(nextCursor.slice(1));
+      nextCursor = u.get("nextCursor");
+    }
+    // Treat "*", empty string, or an unchanged cursor as terminal.
+    if (nextCursor === "*" || nextCursor === "" || nextCursor === cursor) {
+      nextCursor = null;
+    }
 
-    let nextOffset: number | null = moreInBucket ? newOffset : null;
     let nextLifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED" | null = null;
-    if (nextOffset == null) {
+    if (!nextCursor) {
       const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
       nextLifecycle = LIFECYCLE_ORDER[idx + 1] ?? null;
     }
 
     console.log(
-      `[WFS:catalog] lifecycle=${lifecycle} offset=${offset} returned ${items.length}, totalCount=${totalCount}, nextOffset=${nextOffset}`
+      `[WFS:catalog] lifecycle=${lifecycle} returned ${items.length}, totalCount=${totalCount}, nextCursor=${nextCursor ? "yes" : "no"}`
     );
 
-    return { items, nextOffset, totalCount, lifecycle, nextLifecycle };
+    return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
   });
