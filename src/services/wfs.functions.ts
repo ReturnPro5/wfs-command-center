@@ -303,8 +303,11 @@ async function fetchAllOrders(
     orders.push(...parseOrdersResponse(page, pages === 0));
     const nextCursor: string | undefined =
       page?.list?.meta?.nextCursor ?? page?.nextCursor ?? page?.meta?.nextCursor;
-    if (pages === 0) {
-      console.log(`[WFS] orders page 0 nextCursor sample:`, JSON.stringify(nextCursor)?.slice(0, 200));
+    console.log(`[WFS] orders page ${pages} got ${parseOrdersResponse(page).length} lines, nextCursor present: ${!!nextCursor}, sameAsPrev: ${nextCursor === cursor}`);
+    // Break if cursor didn't advance (prevents infinite duplicate-page loops)
+    if (nextCursor && nextCursor === cursor) {
+      console.warn(`[WFS] orders cursor did not advance — breaking pagination loop at page ${pages}`);
+      break;
     }
     // Break if cursor didn't advance (prevents infinite duplicate-page loops)
     if (nextCursor && nextCursor === cursor) {
