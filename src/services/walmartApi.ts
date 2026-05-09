@@ -152,8 +152,9 @@ export async function getInboundShipment(shipmentId: string) {
 }
 
 // ─── Items / Catalog ────────────────────────────────────
-export async function getItems(nextCursor?: string) {
+export async function getItems(nextCursor?: string, lifecycleStatus?: string) {
   const params = new URLSearchParams({ limit: "200" });
+  if (lifecycleStatus) params.set("lifecycleStatus", lifecycleStatus);
   if (nextCursor) params.set("nextCursor", nextCursor);
   return walmartFetch<any>(`/v3/items?${params}`);
 }
