@@ -18,7 +18,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SkuSkuRouteImport } from './routes/sku.$sku'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiDebugOrdersRouteImport } from './routes/api.debug-orders'
-import { Route as ApiDebugInboundRouteImport } from './routes/api.debug-inbound'
+import { Route as ApiPublicDebugInboundRouteImport } from './routes/api.public.debug-inbound'
 
 const SalesRoute = SalesRouteImport.update({
   id: '/sales',
@@ -65,9 +65,9 @@ const ApiDebugOrdersRoute = ApiDebugOrdersRouteImport.update({
   path: '/api/debug-orders',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiDebugInboundRoute = ApiDebugInboundRouteImport.update({
-  id: '/api/debug-inbound',
-  path: '/api/debug-inbound',
+const ApiPublicDebugInboundRoute = ApiPublicDebugInboundRouteImport.update({
+  id: '/api/public/debug-inbound',
+  path: '/api/public/debug-inbound',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -78,10 +78,10 @@ export interface FileRoutesByFullPath {
   '/inventory': typeof InventoryRoute
   '/replenishment': typeof ReplenishmentRoute
   '/sales': typeof SalesRoute
-  '/api/debug-inbound': typeof ApiDebugInboundRoute
   '/api/debug-orders': typeof ApiDebugOrdersRoute
   '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
+  '/api/public/debug-inbound': typeof ApiPublicDebugInboundRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -90,10 +90,10 @@ export interface FileRoutesByTo {
   '/inventory': typeof InventoryRoute
   '/replenishment': typeof ReplenishmentRoute
   '/sales': typeof SalesRoute
-  '/api/debug-inbound': typeof ApiDebugInboundRoute
   '/api/debug-orders': typeof ApiDebugOrdersRoute
   '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
+  '/api/public/debug-inbound': typeof ApiPublicDebugInboundRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -103,10 +103,10 @@ export interface FileRoutesById {
   '/inventory': typeof InventoryRoute
   '/replenishment': typeof ReplenishmentRoute
   '/sales': typeof SalesRoute
-  '/api/debug-inbound': typeof ApiDebugInboundRoute
   '/api/debug-orders': typeof ApiDebugOrdersRoute
   '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
+  '/api/public/debug-inbound': typeof ApiPublicDebugInboundRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -117,10 +117,10 @@ export interface FileRouteTypes {
     | '/inventory'
     | '/replenishment'
     | '/sales'
-    | '/api/debug-inbound'
     | '/api/debug-orders'
     | '/api/health'
     | '/sku/$sku'
+    | '/api/public/debug-inbound'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -129,10 +129,10 @@ export interface FileRouteTypes {
     | '/inventory'
     | '/replenishment'
     | '/sales'
-    | '/api/debug-inbound'
     | '/api/debug-orders'
     | '/api/health'
     | '/sku/$sku'
+    | '/api/public/debug-inbound'
   id:
     | '__root__'
     | '/'
@@ -141,10 +141,10 @@ export interface FileRouteTypes {
     | '/inventory'
     | '/replenishment'
     | '/sales'
-    | '/api/debug-inbound'
     | '/api/debug-orders'
     | '/api/health'
     | '/sku/$sku'
+    | '/api/public/debug-inbound'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -154,10 +154,10 @@ export interface RootRouteChildren {
   InventoryRoute: typeof InventoryRoute
   ReplenishmentRoute: typeof ReplenishmentRoute
   SalesRoute: typeof SalesRoute
-  ApiDebugInboundRoute: typeof ApiDebugInboundRoute
   ApiDebugOrdersRoute: typeof ApiDebugOrdersRoute
   ApiHealthRoute: typeof ApiHealthRoute
   SkuSkuRoute: typeof SkuSkuRoute
+  ApiPublicDebugInboundRoute: typeof ApiPublicDebugInboundRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -225,11 +225,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDebugOrdersRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/debug-inbound': {
-      id: '/api/debug-inbound'
-      path: '/api/debug-inbound'
-      fullPath: '/api/debug-inbound'
-      preLoaderRoute: typeof ApiDebugInboundRouteImport
+    '/api/public/debug-inbound': {
+      id: '/api/public/debug-inbound'
+      path: '/api/public/debug-inbound'
+      fullPath: '/api/public/debug-inbound'
+      preLoaderRoute: typeof ApiPublicDebugInboundRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -242,10 +242,10 @@ const rootRouteChildren: RootRouteChildren = {
   InventoryRoute: InventoryRoute,
   ReplenishmentRoute: ReplenishmentRoute,
   SalesRoute: SalesRoute,
-  ApiDebugInboundRoute: ApiDebugInboundRoute,
   ApiDebugOrdersRoute: ApiDebugOrdersRoute,
   ApiHealthRoute: ApiHealthRoute,
   SkuSkuRoute: SkuSkuRoute,
+  ApiPublicDebugInboundRoute: ApiPublicDebugInboundRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import * as walmartApi from "@/services/walmartApi";
 
-export const Route = createFileRoute("/api/debug-inbound")({
+export const Route = createFileRoute("/api/public/debug-inbound")({
   server: {
     handlers: {
       GET: async () => {
