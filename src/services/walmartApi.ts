@@ -100,26 +100,21 @@ export async function getOrders(params: {
   limit?: number;
   status?: string;
 }) {
+  // Walmart returns nextCursor as a complete query string (e.g.
+  //   "?limit=200&cursor=...&soIndex=...&poIndex=...&createdStartDate=...").
+  // The recommended use is to append it directly to the endpoint, untouched —
+  // re-parsing through URLSearchParams can mangle the base64 cursor.
+  if (params.nextCursor) {
+    const qs = params.nextCursor.startsWith("?") ? params.nextCursor : `?${params.nextCursor}`;
+    return walmartFetch<any>(`/v3/orders${qs}`);
+  }
+
   const searchParams = new URLSearchParams({
     createdStartDate: params.createdStartDate,
     limit: String(params.limit || 200),
     ...(params.createdEndDate ? { createdEndDate: params.createdEndDate } : {}),
     ...(params.status ? { status: params.status } : {}),
   });
-
-  // Walmart returns nextCursor as a full query string, e.g.
-  //   "?limit=200&hasMoreElements=true&cursor=QW9KNCt...&soIndex=...&..."
-  // We must extract the `cursor` value AND preserve `soIndex`/`poIndex` paging
-  // markers, then forward them on the next request. Passing only `cursor` is
-  // insufficient — Walmart silently returns page 1 if the index params are missing.
-  if (params.nextCursor) {
-    const raw = params.nextCursor.startsWith("?") ? params.nextCursor.slice(1) : params.nextCursor;
-    const cursorParams = new URLSearchParams(raw);
-    for (const key of ["cursor", "soIndex", "poIndex", "hasMoreElements"]) {
-      const v = cursorParams.get(key);
-      if (v) searchParams.set(key, v);
-    }
-  }
 
   return walmartFetch<any>(`/v3/orders?${searchParams}`);
 }
