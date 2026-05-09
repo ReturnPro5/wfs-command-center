@@ -44,7 +44,8 @@ function InboundPage() {
     retry: 1,
   });
 
-  const filtered = data?.filter(
+  const visible = data?.filter((s) => s.status !== "cancelled");
+  const filtered = visible?.filter(
     (s) => statusFilter === "all" || s.status === statusFilter
   );
 
@@ -68,7 +69,7 @@ function InboundPage() {
             <option value="delivered">Delivered</option>
             <option value="receiving">Receiving</option>
             <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
+            
           </select>
         </div>
 
