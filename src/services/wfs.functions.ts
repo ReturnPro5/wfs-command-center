@@ -178,6 +178,7 @@ export const getSalesDiagnostics = createServerFn({ method: "GET" }).handler(
     do {
       const raw = await walmartApi.getOrders({
         createdStartDate: startDate,
+        shipNodeType: "WFSFulfilled",
         nextCursor: cursor,
       });
       const page = (raw as any)?.payload ?? raw;
@@ -547,6 +548,7 @@ async function fetchAllOrders(
       const raw = await walmartApi.getOrders({
         createdStartDate: startDate,
         ...(endDate ? { createdEndDate: endDate } : {}),
+        shipNodeType: "WFSFulfilled",
         nextCursor: cursor,
       });
       const page = (raw as any)?.payload ?? raw;
