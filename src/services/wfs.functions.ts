@@ -1230,6 +1230,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
 export interface CatalogSyncState {
   cursor: string | null;
   lifecycle: Lifecycle;
+  published_status: string;
   last_sync_at: string | null;
   last_full_sync_at: string | null;
   status: string;
@@ -1248,20 +1249,27 @@ export interface CachedCatalogResponse {
 
 export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
   async (): Promise<CachedCatalogResponse> => {
-    // Page through to bypass Supabase 1000-row limit
     const PAGE = 1000;
     let from = 0;
     const items: CatalogIdentifier[] = [];
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
       if (!data || data.length === 0) break;
       for (const r of data) {
-        items.push({ sku: r.sku, productName: r.product_name ?? "", gtin: r.gtin ?? "", upc: r.upc ?? "", lifecycle: r.lifecycle ?? "" });
+        items.push({
+          sku: r.sku,
+          productName: r.product_name ?? "",
+          gtin: r.gtin ?? "",
+          upc: r.upc ?? "",
+          lifecycle: r.lifecycle ?? "",
+          condition: r.condition ?? "",
+          publishedStatus: r.published_status ?? "",
+        });
       }
       if (data.length < PAGE) break;
       from += PAGE;
