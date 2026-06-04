@@ -132,16 +132,27 @@ function CatalogPage() {
   }
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return items;
-    const q = search.toLowerCase();
-    return items.filter(
-      (r) =>
+    const q = search.trim().toLowerCase();
+    return items.filter((r) => {
+      if (lifecycleFilter !== "ALL" && (r.lifecycle ?? "").toUpperCase() !== lifecycleFilter) return false;
+      if (!q) return true;
+      return (
         r.sku.toLowerCase().includes(q) ||
         r.productName.toLowerCase().includes(q) ||
         r.gtin.toLowerCase().includes(q) ||
         r.upc.toLowerCase().includes(q)
-    );
-  }, [items, search]);
+      );
+    });
+  }, [items, search, lifecycleFilter]);
+
+  const lifecycleCounts = useMemo(() => {
+    const c = { ACTIVE: 0, ARCHIVED: 0, RETIRED: 0 } as Record<string, number>;
+    for (const r of items) {
+      const k = (r.lifecycle ?? "").toUpperCase();
+      if (k in c) c[k]++;
+    }
+    return c;
+  }, [items]);
 
   const RENDER_CAP = 2000;
   const visibleRows = filtered.slice(0, RENDER_CAP);
