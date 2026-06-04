@@ -1189,6 +1189,8 @@ export const getCatalogPage = createServerFn({ method: "POST" })
             it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
             ""
         ),
+        condition: String(it.condition ?? it.itemCondition ?? "New"),
+        publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
       }))
       .filter((i) => i.sku);
 
