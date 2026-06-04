@@ -21,7 +21,11 @@ export const Route = createFileRoute("/catalog")({
   }),
 });
 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 const STALE_MS = 24 * 60 * 60 * 1000; // auto-sync if cache older than 24h
+
+type LifecycleFilter = "ALL" | "ACTIVE" | "ARCHIVED" | "RETIRED";
 
 function downloadCsv(rows: CatalogIdentifier[]) {
   const header = ["SKU", "Product Name", "GTIN", "UPC"];
