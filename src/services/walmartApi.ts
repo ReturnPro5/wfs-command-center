@@ -152,9 +152,9 @@ export async function getInboundShipment(shipmentId: string) {
 }
 
 // ─── Items / Catalog ────────────────────────────────────
-export async function getItems(nextCursor?: string, lifecycleStatus?: string) {
+export async function getItems(nextCursor?: string, lifecycleStatus?: string, publishedStatus?: string) {
   // Walmart's nextCursor is returned as a full query string (e.g.
-  //   "?nextCursor=AoE...&limit=200&lifecycleStatus=ACTIVE").
+  //   "?nextCursor=AoE...&limit=200&lifecycleStatus=ACTIVE&publishedStatus=PUBLISHED").
   // Append it verbatim — re-parsing through URLSearchParams loses bound state.
   if (nextCursor && nextCursor !== "*" && nextCursor.length > 0) {
     const qs = nextCursor.startsWith("?") ? nextCursor : `?${nextCursor.startsWith("nextCursor=") ? nextCursor : `nextCursor=${nextCursor}`}`;
@@ -162,6 +162,7 @@ export async function getItems(nextCursor?: string, lifecycleStatus?: string) {
   }
   const params = new URLSearchParams({ limit: "200", nextCursor: "*" });
   if (lifecycleStatus) params.set("lifecycleStatus", lifecycleStatus);
+  if (publishedStatus) params.set("publishedStatus", publishedStatus);
   return walmartFetch<any>(`/v3/items?${params}`);
 }
 
