@@ -1108,6 +1108,7 @@ export interface CatalogIdentifier {
   productName: string;
   gtin: string;
   upc: string;
+  lifecycle?: "ACTIVE" | "ARCHIVED" | "RETIRED" | string;
 }
 
 export interface CatalogPage {
