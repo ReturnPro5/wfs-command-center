@@ -63,6 +63,8 @@ function CatalogPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
+  const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
+  const [activeFilters, setActiveFilters] = useState<{ lifecycle: string; publishedStatus: string } | null>(null);
 
   const cancelledRef = useRef(false);
   const itemsMapRef = useRef<Map<string, CatalogIdentifier>>(new Map());
@@ -109,6 +111,8 @@ function CatalogPage() {
         const result = await syncCatalogStep({ data: { reset: reset && firstPass } });
         firstPass = false;
         setState(result.state);
+        setEstimatedTotal(result.estimatedTotal);
+        setActiveFilters(result.currentFilters);
 
         // Refresh just this lifecycle bucket's new items by re-reading them is costly;
         // instead, re-pull cached catalog when sync finishes a lifecycle bucket or completes.
@@ -168,6 +172,10 @@ function CatalogPage() {
     return `${items.length.toLocaleString()} items cached · last sync ${timeAgo(state?.last_sync_at ?? null)}`;
   })();
 
+  const progressPercent = estimatedTotal && estimatedTotal > 0
+    ? Math.min(100, Math.round(((state?.items_this_run ?? 0) / estimatedTotal) * 100))
+    : null;
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -213,6 +221,34 @@ function CatalogPage() {
             <span className="text-muted-foreground">· full re-sync {timeAgo(state.last_full_sync_at)}</span>
           )}
         </div>
+
+        {syncing && (
+          <section className="space-y-3 rounded-md border border-border bg-secondary/40 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium">Sync progress</p>
+                <p className="text-xs text-muted-foreground">
+                  Pages processed {state?.pages_this_run?.toLocaleString() ?? 0}
+                  {estimatedTotal ? ` · Estimated SKUs ${estimatedTotal.toLocaleString()}` : " · Estimated SKUs loading…"}
+                </p>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Filters: {activeFilters?.lifecycle ?? state?.lifecycle ?? "ACTIVE"} · {activeFilters?.publishedStatus ?? state?.published_status ?? "PUBLISHED"}
+              </div>
+            </div>
+            <div className="h-2 overflow-hidden rounded-sm bg-muted">
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: `${progressPercent ?? 0}%` }}
+              />
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span>Processed {state?.items_this_run?.toLocaleString() ?? 0} SKUs</span>
+              <span>Cached {items.length.toLocaleString()} SKUs</span>
+              {progressPercent !== null && <span>{progressPercent}% of estimated total</span>}
+            </div>
+          </section>
+        )}
 
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="w-full sm:w-96">
