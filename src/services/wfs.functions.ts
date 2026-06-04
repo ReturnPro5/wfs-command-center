@@ -1109,6 +1109,8 @@ export interface CatalogIdentifier {
   gtin: string;
   upc: string;
   lifecycle?: "ACTIVE" | "ARCHIVED" | "RETIRED" | string;
+  condition?: string;
+  publishedStatus?: string;
 }
 
 export interface CatalogPage {
@@ -1117,9 +1119,19 @@ export interface CatalogPage {
   totalCount: number | null;
   lifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED";
   nextLifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED" | null;
+  publishedStatus: string;
 }
 
 const LIFECYCLE_ORDER: Array<"ACTIVE" | "ARCHIVED" | "RETIRED"> = ["ACTIVE", "ARCHIVED", "RETIRED"];
+// Walmart returns only PUBLISHED items by default. Walk every status to capture the full catalog.
+const PUBLISHED_STATUS_ORDER: string[] = [
+  "PUBLISHED",
+  "UNPUBLISHED",
+  "STAGE",
+  "IN_PROGRESS",
+  "READY_TO_PUBLISH",
+  "SYSTEM_PROBLEM",
+];
 
 // Walmart's /v3/items uses cursor-based pagination. Offset is capped at 10,000.
 // You must pass `nextCursor=*` on the first call to opt into cursor mode and
