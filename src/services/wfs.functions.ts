@@ -1122,16 +1122,9 @@ export interface CatalogPage {
   publishedStatus: string;
 }
 
-const LIFECYCLE_ORDER: Array<"ACTIVE" | "ARCHIVED" | "RETIRED"> = ["ACTIVE", "ARCHIVED", "RETIRED"];
-// Walmart returns only PUBLISHED items by default. Walk every status to capture the full catalog.
-const PUBLISHED_STATUS_ORDER: string[] = [
-  "PUBLISHED",
-  "UNPUBLISHED",
-  "STAGE",
-  "IN_PROGRESS",
-  "READY_TO_PUBLISH",
-  "SYSTEM_PROBLEM",
-];
+// Only sync ACTIVE + PUBLISHED items (~9k expected).
+const LIFECYCLE_ORDER: Array<"ACTIVE" | "ARCHIVED" | "RETIRED"> = ["ACTIVE"];
+const PUBLISHED_STATUS_ORDER: string[] = ["PUBLISHED"];
 
 // Walmart's /v3/items uses cursor-based pagination. Offset is capped at 10,000.
 // You must pass `nextCursor=*` on the first call to opt into cursor mode and
