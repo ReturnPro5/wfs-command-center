@@ -153,14 +153,22 @@ export async function getInboundShipment(shipmentId: string) {
 
 // ─── Items / Catalog ────────────────────────────────────
 export async function getItems(nextCursor?: string, lifecycleStatus?: string, publishedStatus?: string) {
-  // Walmart's nextCursor is returned as a full query string (e.g.
-  //   "?nextCursor=AoE...&limit=200&lifecycleStatus=ACTIVE&publishedStatus=PUBLISHED").
-  // Append it verbatim — re-parsing through URLSearchParams loses bound state.
+  // Build params fresh on every call. Walmart's cursor is opaque and must be sent
+  // ALONG WITH the original limit + filter params — otherwise the next call returns
+  // empty after page 1. Some Walmart responses return nextCursor as a bare token,
+  // others as a full query string like "?nextCursor=X&limit=200&...". Normalize:
+  // strip any leading "?" and extract just the cursor token, then rebuild the QS.
+  let cursorToken = "*";
   if (nextCursor && nextCursor !== "*" && nextCursor.length > 0) {
-    const qs = nextCursor.startsWith("?") ? nextCursor : `?${nextCursor.startsWith("nextCursor=") ? nextCursor : `nextCursor=${nextCursor}`}`;
-    return walmartFetch<any>(`/v3/items${qs}`);
+    let raw = nextCursor.startsWith("?") ? nextCursor.slice(1) : nextCursor;
+    if (raw.includes("=") || raw.includes("&")) {
+      const parsed = new URLSearchParams(raw);
+      cursorToken = parsed.get("nextCursor") ?? raw;
+    } else {
+      cursorToken = raw;
+    }
   }
-  const params = new URLSearchParams({ limit: "200", nextCursor: "*" });
+  const params = new URLSearchParams({ limit: "200", nextCursor: cursorToken });
   if (lifecycleStatus) params.set("lifecycleStatus", lifecycleStatus);
   if (publishedStatus) params.set("publishedStatus", publishedStatus);
   return walmartFetch<any>(`/v3/items?${params}`);
