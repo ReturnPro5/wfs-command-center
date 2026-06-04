@@ -62,6 +62,7 @@ function CatalogPage() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [lifecycleFilter, setLifecycleFilter] = useState<LifecycleFilter>("ALL");
 
   const cancelledRef = useRef(false);
   const itemsMapRef = useRef<Map<string, CatalogIdentifier>>(new Map());
