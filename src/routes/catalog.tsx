@@ -25,7 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const STALE_MS = 24 * 60 * 60 * 1000; // auto-sync if cache older than 24h
 
-type LifecycleFilter = "ALL" | "ACTIVE" | "ARCHIVED" | "RETIRED";
+type ConditionFilter = "ALL" | string;
 
 function downloadCsv(rows: CatalogIdentifier[]) {
   const header = ["SKU", "Product Name", "GTIN", "UPC"];
