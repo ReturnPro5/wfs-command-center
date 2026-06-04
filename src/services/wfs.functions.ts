@@ -1222,7 +1222,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       `[WFS:catalog] lifecycle=${lifecycle} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, totalCount=${totalCount}, nextCursor=${nextCursor ? nextCursor.slice(0, 40) : "no"}, pageKeys=${Object.keys(page ?? {}).join(",")}`
     );
 
-    return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
+    return { items, nextCursor, totalCount, lifecycle, nextLifecycle, publishedStatus: "PUBLISHED" };
   });
 
 // ─── Cached Catalog (persisted in DB) ───────────────────
