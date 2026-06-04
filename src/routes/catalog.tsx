@@ -214,8 +214,21 @@ function CatalogPage() {
           )}
         </div>
 
-        <div className="w-full sm:w-96">
-          <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="w-full sm:w-96">
+            <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
+          </div>
+          <Select value={lifecycleFilter} onValueChange={(v) => setLifecycleFilter(v as LifecycleFilter)}>
+            <SelectTrigger className="w-full sm:w-56 bg-secondary border-border">
+              <SelectValue placeholder="Item condition" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All conditions ({items.length.toLocaleString()})</SelectItem>
+              <SelectItem value="ACTIVE">Active ({lifecycleCounts.ACTIVE.toLocaleString()})</SelectItem>
+              <SelectItem value="ARCHIVED">Archived ({lifecycleCounts.ARCHIVED.toLocaleString()})</SelectItem>
+              <SelectItem value="RETIRED">Retired ({lifecycleCounts.RETIRED.toLocaleString()})</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {error && <ErrorState message={error} onRetry={() => { setError(null); void runSync(false); }} />}
