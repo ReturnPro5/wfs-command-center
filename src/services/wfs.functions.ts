@@ -1109,6 +1109,8 @@ export interface CatalogIdentifier {
   gtin: string;
   upc: string;
   lifecycle?: "ACTIVE" | "ARCHIVED" | "RETIRED" | string;
+  condition?: string;
+  publishedStatus?: string;
 }
 
 export interface CatalogPage {
@@ -1117,9 +1119,19 @@ export interface CatalogPage {
   totalCount: number | null;
   lifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED";
   nextLifecycle: "ACTIVE" | "ARCHIVED" | "RETIRED" | null;
+  publishedStatus: string;
 }
 
 const LIFECYCLE_ORDER: Array<"ACTIVE" | "ARCHIVED" | "RETIRED"> = ["ACTIVE", "ARCHIVED", "RETIRED"];
+// Walmart returns only PUBLISHED items by default. Walk every status to capture the full catalog.
+const PUBLISHED_STATUS_ORDER: string[] = [
+  "PUBLISHED",
+  "UNPUBLISHED",
+  "STAGE",
+  "IN_PROGRESS",
+  "READY_TO_PUBLISH",
+  "SYSTEM_PROBLEM",
+];
 
 // Walmart's /v3/items uses cursor-based pagination. Offset is capped at 10,000.
 // You must pass `nextCursor=*` on the first call to opt into cursor mode and
@@ -1151,6 +1163,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
           totalCount: null,
           lifecycle,
           nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null,
+          publishedStatus: "PUBLISHED",
         };
       }
       throw err;
@@ -1176,6 +1189,8 @@ export const getCatalogPage = createServerFn({ method: "POST" })
             it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
             ""
         ),
+        condition: String(it.condition ?? it.itemCondition ?? "New"),
+        publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
       }))
       .filter((i) => i.sku);
 
@@ -1207,7 +1222,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       `[WFS:catalog] lifecycle=${lifecycle} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, totalCount=${totalCount}, nextCursor=${nextCursor ? nextCursor.slice(0, 40) : "no"}, pageKeys=${Object.keys(page ?? {}).join(",")}`
     );
 
-    return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
+    return { items, nextCursor, totalCount, lifecycle, nextLifecycle, publishedStatus: "PUBLISHED" };
   });
 
 // ─── Cached Catalog (persisted in DB) ───────────────────
@@ -1215,6 +1230,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
 export interface CatalogSyncState {
   cursor: string | null;
   lifecycle: Lifecycle;
+  published_status: string;
   last_sync_at: string | null;
   last_full_sync_at: string | null;
   status: string;
@@ -1233,20 +1249,27 @@ export interface CachedCatalogResponse {
 
 export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
   async (): Promise<CachedCatalogResponse> => {
-    // Page through to bypass Supabase 1000-row limit
     const PAGE = 1000;
     let from = 0;
     const items: CatalogIdentifier[] = [];
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
       if (!data || data.length === 0) break;
       for (const r of data) {
-        items.push({ sku: r.sku, productName: r.product_name ?? "", gtin: r.gtin ?? "", upc: r.upc ?? "", lifecycle: r.lifecycle ?? "" });
+        items.push({
+          sku: r.sku,
+          productName: r.product_name ?? "",
+          gtin: r.gtin ?? "",
+          upc: r.upc ?? "",
+          lifecycle: r.lifecycle ?? "",
+          condition: r.condition ?? "",
+          publishedStatus: r.published_status ?? "",
+        });
       }
       if (data.length < PAGE) break;
       from += PAGE;
@@ -1292,6 +1315,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
 
     let cursor: string | null = stateRow.cursor;
     let lifecycle: Lifecycle = (stateRow.lifecycle as Lifecycle) ?? "ACTIVE";
+    let publishedStatus: string = stateRow.published_status ?? "PUBLISHED";
     let pagesThisRun = stateRow.pages_this_run ?? 0;
     let itemsThisRun = stateRow.items_this_run ?? 0;
 
@@ -1303,23 +1327,23 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     if (data.reset || (startingFresh && fullDue)) {
       cursor = null;
       lifecycle = "ACTIVE";
+      publishedStatus = "PUBLISHED";
       pagesThisRun = 0;
       itemsThisRun = 0;
     } else if (startingFresh) {
-      // Resume: keep saved cursor/lifecycle, reset run counters
+      // Resume: keep saved cursor/lifecycle/publishedStatus, reset run counters
       pagesThisRun = 0;
       itemsThisRun = 0;
     }
 
     // Fetch one page from Walmart
-    const page = await getCatalogPageInternal(cursor, lifecycle);
+    const page = await getCatalogPageInternal(cursor, lifecycle, publishedStatus);
 
     // Upsert items
     let added = 0;
     let updated = 0;
     if (page.items.length) {
       const now = new Date().toISOString();
-      // Find which SKUs already exist
       const skus = page.items.map((i) => i.sku);
       const { data: existing } = await supabaseAdmin
         .from("catalog_items")
@@ -1335,10 +1359,11 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
         gtin: it.gtin,
         upc: it.upc,
         lifecycle: page.lifecycle,
+        condition: it.condition ?? "New",
+        published_status: it.publishedStatus ?? publishedStatus,
         last_seen_at: now,
         last_synced_at: now,
       }));
-      // Upsert in chunks
       const CHUNK = 500;
       for (let i = 0; i < rows.length; i += CHUNK) {
         const slice = rows.slice(i, i + CHUNK);
@@ -1349,13 +1374,25 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
       }
     }
 
-    // Compute next state
+    // Compute next state — walk cursor → publishedStatus → lifecycle
     let nextCursor: string | null = page.nextCursor;
     let nextLifecycle: Lifecycle = lifecycle;
+    let nextPublished: string = publishedStatus;
     let done = false;
-    if (!nextCursor && page.nextLifecycle) {
+
+    if (nextCursor) {
+      // More pages in current bucket
+      nextLifecycle = lifecycle;
+      nextPublished = publishedStatus;
+    } else if (page.nextLifecycle) {
+      // Bucket exhausted, but more lifecycles to walk
       nextLifecycle = page.nextLifecycle;
-    } else if (!nextCursor && !page.nextLifecycle) {
+      nextPublished = page.publishedStatus;
+    } else if (page.publishedStatus !== publishedStatus) {
+      // Bucket exhausted, same lifecycle, next publishedStatus
+      nextLifecycle = lifecycle;
+      nextPublished = page.publishedStatus;
+    } else {
       done = true;
     }
 
@@ -1366,6 +1403,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     const update: any = {
       cursor: done ? null : nextCursor,
       lifecycle: done ? "ACTIVE" : nextLifecycle,
+      published_status: done ? "PUBLISHED" : nextPublished,
       last_sync_at: nowIso,
       status: done ? "done" : "running",
       error: null,
@@ -1396,21 +1434,36 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     };
   });
 
-// Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper
+// Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper.
+// Walks both lifecycleStatus AND publishedStatus so the full catalog is captured.
 async function getCatalogPageInternal(
   cursorIn: string | null,
-  lifecycle: Lifecycle
+  lifecycle: Lifecycle,
+  publishedStatus: string = "PUBLISHED"
 ): Promise<CatalogPage> {
   await getWalmartAccessToken();
   const cursor = cursorIn ?? "*";
+
+  const pubIdx = PUBLISHED_STATUS_ORDER.indexOf(publishedStatus);
+  const nextPublished = PUBLISHED_STATUS_ORDER[pubIdx + 1];
+  const lifecycleIdx = LIFECYCLE_ORDER.indexOf(lifecycle);
+  const nextLifecycleFinal = LIFECYCLE_ORDER[lifecycleIdx + 1] ?? null;
+
   let raw: any;
   try {
-    raw = await walmartApi.getItems(cursor, lifecycle);
+    raw = await walmartApi.getItems(cursor, lifecycle, publishedStatus);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) {
-      const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
-      return { items: [], nextCursor: null, totalCount: null, lifecycle, nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null };
+      // Empty bucket — advance to next publishedStatus (or next lifecycle if exhausted)
+      return {
+        items: [],
+        nextCursor: null,
+        totalCount: null,
+        lifecycle,
+        nextLifecycle: nextPublished ? lifecycle : nextLifecycleFinal,
+        publishedStatus: nextPublished ?? "PUBLISHED",
+      };
     }
     throw err;
   }
@@ -1425,6 +1478,8 @@ async function getCatalogPageInternal(
       upc: String(
         it.upc ?? it.UPC ?? it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ?? ""
       ),
+      condition: String(it.condition ?? it.itemCondition ?? "New"),
+      publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
     }))
     .filter((i) => i.sku);
   const totalCount: number | null =
@@ -1432,14 +1487,30 @@ async function getCatalogPageInternal(
   let nextCursor: string | null =
     page?.nextCursor ?? page?.meta?.nextCursor ?? page?.list?.meta?.nextCursor ?? null;
   if (nextCursor === "*" || nextCursor === "" || nextCursor === cursor) nextCursor = null;
-  let nextLifecycle: Lifecycle | null = null;
+
+  // Determine what's next: more cursor pages → same bucket; else next publishedStatus; else next lifecycle.
+  let nextLifecycle: Lifecycle | null = lifecycle;
+  let nextPub = publishedStatus;
   if (!nextCursor) {
-    const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
-    nextLifecycle = LIFECYCLE_ORDER[idx + 1] ?? null;
+    if (nextPublished) {
+      nextPub = nextPublished;
+      nextLifecycle = lifecycle;
+    } else {
+      nextLifecycle = nextLifecycleFinal;
+      nextPub = "PUBLISHED";
+    }
   }
+
   console.log(
-    `[WFS:catalog-sync] lifecycle=${lifecycle} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, nextCursor=${nextCursor ? "yes" : "no"}`
+    `[WFS:catalog-sync] lifecycle=${lifecycle} pub=${publishedStatus} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, nextCursor=${nextCursor ? "yes" : "no"}, nextPub=${nextPub}, nextLifecycle=${nextLifecycle}`
   );
-  return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
+  return {
+    items,
+    nextCursor,
+    totalCount,
+    lifecycle,
+    nextLifecycle: nextCursor ? null : nextLifecycle,
+    publishedStatus: nextPub,
+  };
 }
 

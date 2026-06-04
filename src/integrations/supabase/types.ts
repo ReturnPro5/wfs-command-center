@@ -16,32 +16,38 @@ export type Database = {
     Tables: {
       catalog_items: {
         Row: {
+          condition: string
           first_seen_at: string
           gtin: string
           last_seen_at: string
           last_synced_at: string
           lifecycle: string
           product_name: string
+          published_status: string
           sku: string
           upc: string
         }
         Insert: {
+          condition?: string
           first_seen_at?: string
           gtin?: string
           last_seen_at?: string
           last_synced_at?: string
           lifecycle?: string
           product_name?: string
+          published_status?: string
           sku: string
           upc?: string
         }
         Update: {
+          condition?: string
           first_seen_at?: string
           gtin?: string
           last_seen_at?: string
           last_synced_at?: string
           lifecycle?: string
           product_name?: string
+          published_status?: string
           sku?: string
           upc?: string
         }
@@ -57,6 +63,7 @@ export type Database = {
           last_sync_at: string | null
           lifecycle: string
           pages_this_run: number
+          published_status: string
           status: string
         }
         Insert: {
@@ -68,6 +75,7 @@ export type Database = {
           last_sync_at?: string | null
           lifecycle?: string
           pages_this_run?: number
+          published_status?: string
           status?: string
         }
         Update: {
@@ -79,6 +87,7 @@ export type Database = {
           last_sync_at?: string | null
           lifecycle?: string
           pages_this_run?: number
+          published_status?: string
           status?: string
         }
         Relationships: []
