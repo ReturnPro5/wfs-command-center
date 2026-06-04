@@ -30,11 +30,20 @@ type ConditionFilter = "ALL" | string;
 function downloadCsv(rows: CatalogIdentifier[]) {
   const header = ["SKU", "Product Name", "GTIN", "UPC"];
   const escape = (v: string) => `"${(v ?? "").replace(/"/g, '""')}"`;
+  // Force Excel/Sheets to treat long numeric IDs as text (no scientific notation,
+  // no truncation of leading zeros) by wrapping in ="..." formula syntax.
+  const escapeId = (v: string) => {
+    const s = (v ?? "").replace(/"/g, '""');
+    return s ? `="${s}"` : `""`;
+  };
   const csv = [
     header.join(","),
-    ...rows.map((r) => [r.sku, r.productName, r.gtin, r.upc].map(escape).join(",")),
-  ].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    ...rows.map((r) =>
+      [escape(r.sku), escape(r.productName), escapeId(r.gtin), escapeId(r.upc)].join(","),
+    ),
+  ].join("\r\n");
+  // Prepend UTF-8 BOM so Excel opens it correctly.
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
