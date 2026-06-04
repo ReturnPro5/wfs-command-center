@@ -1163,6 +1163,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
           totalCount: null,
           lifecycle,
           nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null,
+          publishedStatus: "PUBLISHED",
         };
       }
       throw err;
