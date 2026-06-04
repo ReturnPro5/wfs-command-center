@@ -1135,17 +1135,19 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       .object({
         cursor: z.string().nullable().optional(),
         lifecycle: z.enum(["ACTIVE", "ARCHIVED", "RETIRED"]).optional(),
+        publishedStatus: z.string().optional(),
       })
       .parse(data)
   )
   .handler(async ({ data }): Promise<CatalogPage> => {
     await getWalmartAccessToken();
     const lifecycle = data.lifecycle ?? "ACTIVE";
+    const publishedStatus = data.publishedStatus ?? "PUBLISHED";
     const cursor = data.cursor ?? "*"; // "*" = first page in cursor mode
 
     let raw: any;
     try {
-      raw = await walmartApi.getItems(cursor, lifecycle);
+      raw = await walmartApi.getItems(cursor, lifecycle, publishedStatus);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) {
@@ -1156,7 +1158,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
           totalCount: null,
           lifecycle,
           nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null,
-          publishedStatus: "PUBLISHED",
+          publishedStatus,
         };
       }
       throw err;
@@ -1199,9 +1201,9 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       page?.meta?.nextCursor ??
       page?.list?.meta?.nextCursor ??
       null;
-    // Treat "*", empty, or unchanged cursor as terminal. Keep the full querystring
-    // (with leading "?") intact — getItems appends it verbatim to /v3/items.
-    if (nextCursor === "*" || nextCursor === "" || nextCursor === cursor) {
+    // Walmart may repeat the same cursor token across many pages while still
+    // returning new results, so only treat truly empty cursors as terminal.
+    if (nextCursor === "*" || nextCursor === "") {
       nextCursor = null;
     }
 
@@ -1215,7 +1217,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       `[WFS:catalog] lifecycle=${lifecycle} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, totalCount=${totalCount}, nextCursor=${nextCursor ? nextCursor.slice(0, 40) : "no"}, pageKeys=${Object.keys(page ?? {}).join(",")}`
     );
 
-    return { items, nextCursor, totalCount, lifecycle, nextLifecycle, publishedStatus: "PUBLISHED" };
+    return { items, nextCursor, totalCount, lifecycle, nextLifecycle, publishedStatus };
   });
 
 // ─── Cached Catalog (persisted in DB) ───────────────────
@@ -1290,6 +1292,11 @@ export interface SyncStepResult {
   updated: number;
   pageItems: number;
   totalCached: number;
+   estimatedTotal: number | null;
+   currentFilters: {
+    lifecycle: Lifecycle;
+    publishedStatus: string;
+   };
   done: boolean;
   state: CatalogSyncState;
 }
@@ -1318,6 +1325,12 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     const startingFresh = data.reset || stateRow.status === "idle" || stateRow.status === "done" || stateRow.status === "error";
 
     if (data.reset || (startingFresh && fullDue)) {
+      const { error: clearErr } = await supabaseAdmin
+        .from("catalog_items")
+        .delete()
+        .neq("sku", "");
+      if (clearErr) throw new Error(`catalog reset failed: ${clearErr.message}`);
+
       cursor = null;
       lifecycle = "ACTIVE";
       publishedStatus = "PUBLISHED";
@@ -1422,6 +1435,11 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
       updated,
       pageItems: page.items.length,
       totalCached: count ?? 0,
+      estimatedTotal: page.totalCount,
+      currentFilters: {
+        lifecycle,
+        publishedStatus,
+      },
       done,
       state: newState as CatalogSyncState,
     };
@@ -1479,7 +1497,7 @@ async function getCatalogPageInternal(
     page?.totalItems ?? page?.totalCount ?? page?.meta?.totalCount ?? page?.list?.meta?.totalCount ?? null;
   let nextCursor: string | null =
     page?.nextCursor ?? page?.meta?.nextCursor ?? page?.list?.meta?.nextCursor ?? null;
-  if (nextCursor === "*" || nextCursor === "" || nextCursor === cursor) nextCursor = null;
+  if (nextCursor === "*" || nextCursor === "") nextCursor = null;
 
   // Determine what's next: more cursor pages → same bucket; else next publishedStatus; else next lifecycle.
   let nextLifecycle: Lifecycle | null = lifecycle;
