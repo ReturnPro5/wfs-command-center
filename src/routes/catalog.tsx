@@ -21,7 +21,11 @@ export const Route = createFileRoute("/catalog")({
   }),
 });
 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 const STALE_MS = 24 * 60 * 60 * 1000; // auto-sync if cache older than 24h
+
+type LifecycleFilter = "ALL" | "ACTIVE" | "ARCHIVED" | "RETIRED";
 
 function downloadCsv(rows: CatalogIdentifier[]) {
   const header = ["SKU", "Product Name", "GTIN", "UPC"];
@@ -58,6 +62,7 @@ function CatalogPage() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [lifecycleFilter, setLifecycleFilter] = useState<LifecycleFilter>("ALL");
 
   const cancelledRef = useRef(false);
   const itemsMapRef = useRef<Map<string, CatalogIdentifier>>(new Map());
@@ -127,16 +132,27 @@ function CatalogPage() {
   }
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return items;
-    const q = search.toLowerCase();
-    return items.filter(
-      (r) =>
+    const q = search.trim().toLowerCase();
+    return items.filter((r) => {
+      if (lifecycleFilter !== "ALL" && (r.lifecycle ?? "").toUpperCase() !== lifecycleFilter) return false;
+      if (!q) return true;
+      return (
         r.sku.toLowerCase().includes(q) ||
         r.productName.toLowerCase().includes(q) ||
         r.gtin.toLowerCase().includes(q) ||
         r.upc.toLowerCase().includes(q)
-    );
-  }, [items, search]);
+      );
+    });
+  }, [items, search, lifecycleFilter]);
+
+  const lifecycleCounts = useMemo(() => {
+    const c = { ACTIVE: 0, ARCHIVED: 0, RETIRED: 0 } as Record<string, number>;
+    for (const r of items) {
+      const k = (r.lifecycle ?? "").toUpperCase();
+      if (k in c) c[k]++;
+    }
+    return c;
+  }, [items]);
 
   const RENDER_CAP = 2000;
   const visibleRows = filtered.slice(0, RENDER_CAP);
@@ -198,8 +214,21 @@ function CatalogPage() {
           )}
         </div>
 
-        <div className="w-full sm:w-96">
-          <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="w-full sm:w-96">
+            <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
+          </div>
+          <Select value={lifecycleFilter} onValueChange={(v) => setLifecycleFilter(v as LifecycleFilter)}>
+            <SelectTrigger className="w-full sm:w-56 bg-secondary border-border">
+              <SelectValue placeholder="Item condition" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All conditions ({items.length.toLocaleString()})</SelectItem>
+              <SelectItem value="ACTIVE">Active ({lifecycleCounts.ACTIVE.toLocaleString()})</SelectItem>
+              <SelectItem value="ARCHIVED">Archived ({lifecycleCounts.ARCHIVED.toLocaleString()})</SelectItem>
+              <SelectItem value="RETIRED">Retired ({lifecycleCounts.RETIRED.toLocaleString()})</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {error && <ErrorState message={error} onRetry={() => { setError(null); void runSync(false); }} />}
