@@ -134,7 +134,7 @@ function CatalogPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((r) => {
-      if (lifecycleFilter !== "ALL" && (r.lifecycle ?? "").toUpperCase() !== lifecycleFilter) return false;
+      if (conditionFilter !== "ALL" && (r.condition ?? "") !== conditionFilter) return false;
       if (!q) return true;
       return (
         r.sku.toLowerCase().includes(q) ||
@@ -143,15 +143,15 @@ function CatalogPage() {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [items, search, lifecycleFilter]);
+  }, [items, search, conditionFilter]);
 
-  const lifecycleCounts = useMemo(() => {
-    const c = { ACTIVE: 0, ARCHIVED: 0, RETIRED: 0 } as Record<string, number>;
+  const conditionCounts = useMemo(() => {
+    const c = new Map<string, number>();
     for (const r of items) {
-      const k = (r.lifecycle ?? "").toUpperCase();
-      if (k in c) c[k]++;
+      const k = r.condition?.trim() || "Unknown";
+      c.set(k, (c.get(k) ?? 0) + 1);
     }
-    return c;
+    return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [items]);
 
   const RENDER_CAP = 2000;
