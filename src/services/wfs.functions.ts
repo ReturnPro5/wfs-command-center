@@ -1307,6 +1307,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
 
     let cursor: string | null = stateRow.cursor;
     let lifecycle: Lifecycle = (stateRow.lifecycle as Lifecycle) ?? "ACTIVE";
+    let publishedStatus: string = stateRow.published_status ?? "PUBLISHED";
     let pagesThisRun = stateRow.pages_this_run ?? 0;
     let itemsThisRun = stateRow.items_this_run ?? 0;
 
@@ -1318,23 +1319,23 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     if (data.reset || (startingFresh && fullDue)) {
       cursor = null;
       lifecycle = "ACTIVE";
+      publishedStatus = "PUBLISHED";
       pagesThisRun = 0;
       itemsThisRun = 0;
     } else if (startingFresh) {
-      // Resume: keep saved cursor/lifecycle, reset run counters
+      // Resume: keep saved cursor/lifecycle/publishedStatus, reset run counters
       pagesThisRun = 0;
       itemsThisRun = 0;
     }
 
     // Fetch one page from Walmart
-    const page = await getCatalogPageInternal(cursor, lifecycle);
+    const page = await getCatalogPageInternal(cursor, lifecycle, publishedStatus);
 
     // Upsert items
     let added = 0;
     let updated = 0;
     if (page.items.length) {
       const now = new Date().toISOString();
-      // Find which SKUs already exist
       const skus = page.items.map((i) => i.sku);
       const { data: existing } = await supabaseAdmin
         .from("catalog_items")
@@ -1350,10 +1351,11 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
         gtin: it.gtin,
         upc: it.upc,
         lifecycle: page.lifecycle,
+        condition: it.condition ?? "New",
+        published_status: it.publishedStatus ?? publishedStatus,
         last_seen_at: now,
         last_synced_at: now,
       }));
-      // Upsert in chunks
       const CHUNK = 500;
       for (let i = 0; i < rows.length; i += CHUNK) {
         const slice = rows.slice(i, i + CHUNK);
@@ -1364,13 +1366,25 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
       }
     }
 
-    // Compute next state
+    // Compute next state — walk cursor → publishedStatus → lifecycle
     let nextCursor: string | null = page.nextCursor;
     let nextLifecycle: Lifecycle = lifecycle;
+    let nextPublished: string = publishedStatus;
     let done = false;
-    if (!nextCursor && page.nextLifecycle) {
+
+    if (nextCursor) {
+      // More pages in current bucket
+      nextLifecycle = lifecycle;
+      nextPublished = publishedStatus;
+    } else if (page.nextLifecycle) {
+      // Bucket exhausted, but more lifecycles to walk
       nextLifecycle = page.nextLifecycle;
-    } else if (!nextCursor && !page.nextLifecycle) {
+      nextPublished = page.publishedStatus;
+    } else if (page.publishedStatus !== publishedStatus) {
+      // Bucket exhausted, same lifecycle, next publishedStatus
+      nextLifecycle = lifecycle;
+      nextPublished = page.publishedStatus;
+    } else {
       done = true;
     }
 
@@ -1381,6 +1395,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     const update: any = {
       cursor: done ? null : nextCursor,
       lifecycle: done ? "ACTIVE" : nextLifecycle,
+      published_status: done ? "PUBLISHED" : nextPublished,
       last_sync_at: nowIso,
       status: done ? "done" : "running",
       error: null,
