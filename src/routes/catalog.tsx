@@ -218,15 +218,17 @@ function CatalogPage() {
           <div className="w-full sm:w-96">
             <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
           </div>
-          <Select value={lifecycleFilter} onValueChange={(v) => setLifecycleFilter(v as LifecycleFilter)}>
-            <SelectTrigger className="w-full sm:w-56 bg-secondary border-border">
+          <Select value={conditionFilter} onValueChange={(v) => setConditionFilter(v)}>
+            <SelectTrigger className="w-full sm:w-64 bg-secondary border-border">
               <SelectValue placeholder="Item condition" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All conditions ({items.length.toLocaleString()})</SelectItem>
-              <SelectItem value="ACTIVE">Active ({lifecycleCounts.ACTIVE.toLocaleString()})</SelectItem>
-              <SelectItem value="ARCHIVED">Archived ({lifecycleCounts.ARCHIVED.toLocaleString()})</SelectItem>
-              <SelectItem value="RETIRED">Retired ({lifecycleCounts.RETIRED.toLocaleString()})</SelectItem>
+              {conditionCounts.map(([cond, n]) => (
+                <SelectItem key={cond} value={cond}>
+                  {cond} ({n.toLocaleString()})
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
