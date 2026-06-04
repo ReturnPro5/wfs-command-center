@@ -39,39 +39,63 @@ export async function getWalmartAccessToken(): Promise<string> {
 
   pendingTokenRequest = (async () => {
     const credentials = btoa(`${clientId}:${clientSecret}`);
-    const correlationId = crypto.randomUUID();
-    console.log("[WalmartAuth] Requesting new token, correlationId:", correlationId);
+    const MAX_ATTEMPTS = 4;
+    let lastErr: unknown = null;
 
-    const response = await fetch(`${baseUrl}/v3/token`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Basic ${credentials}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "WM_SVC.NAME": "Walmart Marketplace",
-        "WM_QOS.CORRELATION_ID": correlationId,
-      },
-      body: "grant_type=client_credentials",
-    });
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const correlationId = crypto.randomUUID();
+      try {
+        console.log(`[WalmartAuth] Token request attempt ${attempt}/${MAX_ATTEMPTS}, correlationId:`, correlationId);
+        const response = await fetch(`${baseUrl}/v3/token`, {
+          method: "POST",
+          signal: AbortSignal.timeout(15_000),
+          headers: {
+            "Authorization": `Basic ${credentials}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "WM_SVC.NAME": "Walmart Marketplace",
+            "WM_QOS.CORRELATION_ID": correlationId,
+          },
+          body: "grant_type=client_credentials",
+        });
 
-    if (!response.ok) {
-      const text = await response.text();
-      console.error("[WalmartAuth] Token request failed:", response.status, text);
-      throw new Error(`Walmart auth failed [${response.status}]: ${text}`);
+        if (!response.ok) {
+          const text = await response.text();
+          console.error("[WalmartAuth] Token request failed:", response.status, text);
+          // Retry on 5xx and 429 (transient upstream issues like Cloudflare 520)
+          if ((response.status >= 500 || response.status === 429) && attempt < MAX_ATTEMPTS) {
+            lastErr = new Error(`Walmart auth failed [${response.status}]: ${text}`);
+            await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1) + Math.random() * 250));
+            continue;
+          }
+          throw new Error(`Walmart auth failed [${response.status}]: ${text}`);
+        }
+
+        const data: TokenResponse = await response.json();
+        console.log("[WalmartAuth] Token acquired, expires_in:", data.expires_in);
+        cachedToken = {
+          token: data.access_token,
+          expiresAt: Date.now() + data.expires_in * 1000,
+        };
+        return cachedToken.token;
+      } catch (err: any) {
+        lastErr = err;
+        const transient =
+          err?.name === "TimeoutError" ||
+          err?.name === "AbortError" ||
+          /\[5\d\d\]|\[429\]|timeout|ECONNRESET|ETIMEDOUT/i.test(String(err?.message ?? ""));
+        if (transient && attempt < MAX_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1) + Math.random() * 250));
+          continue;
+        }
+        throw err;
+      }
     }
-
-    const data: TokenResponse = await response.json();
-    console.log("[WalmartAuth] Token acquired, expires_in:", data.expires_in);
-
-    cachedToken = {
-      token: data.access_token,
-      expiresAt: Date.now() + data.expires_in * 1000,
-    };
-
-    return cachedToken.token;
+    throw lastErr instanceof Error ? lastErr : new Error("Walmart auth failed after retries");
   })().finally(() => {
     pendingTokenRequest = null;
   });
+
 
   return pendingTokenRequest;
 }
