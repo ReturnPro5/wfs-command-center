@@ -1411,21 +1411,36 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     };
   });
 
-// Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper
+// Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper.
+// Walks both lifecycleStatus AND publishedStatus so the full catalog is captured.
 async function getCatalogPageInternal(
   cursorIn: string | null,
-  lifecycle: Lifecycle
+  lifecycle: Lifecycle,
+  publishedStatus: string = "PUBLISHED"
 ): Promise<CatalogPage> {
   await getWalmartAccessToken();
   const cursor = cursorIn ?? "*";
+
+  const pubIdx = PUBLISHED_STATUS_ORDER.indexOf(publishedStatus);
+  const nextPublished = PUBLISHED_STATUS_ORDER[pubIdx + 1];
+  const lifecycleIdx = LIFECYCLE_ORDER.indexOf(lifecycle);
+  const nextLifecycleFinal = LIFECYCLE_ORDER[lifecycleIdx + 1] ?? null;
+
   let raw: any;
   try {
-    raw = await walmartApi.getItems(cursor, lifecycle);
+    raw = await walmartApi.getItems(cursor, lifecycle, publishedStatus);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) {
-      const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
-      return { items: [], nextCursor: null, totalCount: null, lifecycle, nextLifecycle: LIFECYCLE_ORDER[idx + 1] ?? null };
+      // Empty bucket — advance to next publishedStatus (or next lifecycle if exhausted)
+      return {
+        items: [],
+        nextCursor: null,
+        totalCount: null,
+        lifecycle,
+        nextLifecycle: nextPublished ? lifecycle : nextLifecycleFinal,
+        publishedStatus: nextPublished ?? "PUBLISHED",
+      };
     }
     throw err;
   }
@@ -1440,6 +1455,8 @@ async function getCatalogPageInternal(
       upc: String(
         it.upc ?? it.UPC ?? it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ?? ""
       ),
+      condition: String(it.condition ?? it.itemCondition ?? "New"),
+      publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
     }))
     .filter((i) => i.sku);
   const totalCount: number | null =
@@ -1447,14 +1464,30 @@ async function getCatalogPageInternal(
   let nextCursor: string | null =
     page?.nextCursor ?? page?.meta?.nextCursor ?? page?.list?.meta?.nextCursor ?? null;
   if (nextCursor === "*" || nextCursor === "" || nextCursor === cursor) nextCursor = null;
-  let nextLifecycle: Lifecycle | null = null;
+
+  // Determine what's next: more cursor pages → same bucket; else next publishedStatus; else next lifecycle.
+  let nextLifecycle: Lifecycle | null = lifecycle;
+  let nextPub = publishedStatus;
   if (!nextCursor) {
-    const idx = LIFECYCLE_ORDER.indexOf(lifecycle);
-    nextLifecycle = LIFECYCLE_ORDER[idx + 1] ?? null;
+    if (nextPublished) {
+      nextPub = nextPublished;
+      nextLifecycle = lifecycle;
+    } else {
+      nextLifecycle = nextLifecycleFinal;
+      nextPub = "PUBLISHED";
+    }
   }
+
   console.log(
-    `[WFS:catalog-sync] lifecycle=${lifecycle} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, nextCursor=${nextCursor ? "yes" : "no"}`
+    `[WFS:catalog-sync] lifecycle=${lifecycle} pub=${publishedStatus} cursorIn=${cursor.slice(0, 20)} returned ${items.length}, nextCursor=${nextCursor ? "yes" : "no"}, nextPub=${nextPub}, nextLifecycle=${nextLifecycle}`
   );
-  return { items, nextCursor, totalCount, lifecycle, nextLifecycle };
+  return {
+    items,
+    nextCursor,
+    totalCount,
+    lifecycle,
+    nextLifecycle: nextCursor ? null : nextLifecycle,
+    publishedStatus: nextPub,
+  };
 }
 
