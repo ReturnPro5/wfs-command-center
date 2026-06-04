@@ -1325,6 +1325,12 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     const startingFresh = data.reset || stateRow.status === "idle" || stateRow.status === "done" || stateRow.status === "error";
 
     if (data.reset || (startingFresh && fullDue)) {
+      const { error: clearErr } = await supabaseAdmin
+        .from("catalog_items")
+        .delete()
+        .neq("sku", "");
+      if (clearErr) throw new Error(`catalog reset failed: ${clearErr.message}`);
+
       cursor = null;
       lifecycle = "ACTIVE";
       publishedStatus = "PUBLISHED";
