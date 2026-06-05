@@ -6,10 +6,12 @@ import { ErrorState, EmptyState } from "@/components/StateDisplays";
 import {
   getCachedCatalog,
   syncCatalogStep,
+  backfillUnknownFulfillment,
   type CatalogIdentifier,
   type CatalogSyncState,
 } from "@/services/wfs.functions";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/catalog")({
   component: CatalogPage,
