@@ -1103,6 +1103,12 @@ function aggregateDailyTrends(orders: RawOrder[]): SalesTrend[] {
 }
 
 // ─── Catalog Identifiers (SKU / GTIN / UPC) ─────────────
+export type FulfillmentType =
+  | "Walmart Fulfilled"
+  | "Seller Fulfilled (WFS eligible)"
+  | "Seller Fulfilled"
+  | "Unknown";
+
 export interface CatalogIdentifier {
   sku: string;
   productName: string;
@@ -1111,6 +1117,27 @@ export interface CatalogIdentifier {
   lifecycle?: "ACTIVE" | "ARCHIVED" | "RETIRED" | string;
   condition?: string;
   publishedStatus?: string;
+  fulfillment?: FulfillmentType | string;
+}
+
+// Derive fulfillment label from Walmart /v3/items fields.
+// shippingProgramType === "WFS" → item is actively WFS-fulfilled.
+// wfsEnabled true (but not in WFS program) → seller-fulfilled, eligible for WFS.
+// Otherwise → seller-fulfilled.
+function deriveFulfillment(it: any): FulfillmentType {
+  const ship = String(
+    it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
+  ).toUpperCase();
+  const wfsEnabledRaw = it?.wfsEnabled ?? it?.wfs_enabled ?? it?.isWfsEnabled;
+  const wfsEnabled =
+    wfsEnabledRaw === true ||
+    String(wfsEnabledRaw).toLowerCase() === "true" ||
+    String(wfsEnabledRaw).toLowerCase() === "yes";
+
+  if (ship.includes("WFS")) return "Walmart Fulfilled";
+  if (wfsEnabled) return "Seller Fulfilled (WFS eligible)";
+  if (ship || wfsEnabledRaw !== undefined) return "Seller Fulfilled";
+  return "Unknown";
 }
 
 export interface CatalogPage {
@@ -1186,6 +1213,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
         ),
         condition: String(it.condition ?? it.itemCondition ?? "New"),
         publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
+        fulfillment: deriveFulfillment(it),
       }))
       .filter((i) => i.sku);
 
@@ -1250,12 +1278,12 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
       if (!data || data.length === 0) break;
-      for (const r of data) {
+      for (const r of data as any[]) {
         items.push({
           sku: r.sku,
           productName: r.product_name ?? "",
@@ -1264,6 +1292,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           lifecycle: r.lifecycle ?? "",
           condition: r.condition ?? "",
           publishedStatus: r.published_status ?? "",
+          fulfillment: r.fulfillment ?? "Unknown",
         });
       }
       if (data.length < PAGE) break;
@@ -1367,6 +1396,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
         lifecycle: page.lifecycle,
         condition: it.condition ?? "New",
         published_status: it.publishedStatus ?? publishedStatus,
+        fulfillment: it.fulfillment ?? "Unknown",
         last_seen_at: now,
         last_synced_at: now,
       }));
@@ -1375,7 +1405,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
         const slice = rows.slice(i, i + CHUNK);
         const { error: upErr } = await supabaseAdmin
           .from("catalog_items")
-          .upsert(slice, { onConflict: "sku", ignoreDuplicates: false });
+          .upsert(slice as any, { onConflict: "sku", ignoreDuplicates: false });
         if (upErr) throw new Error(`catalog upsert failed: ${upErr.message}`);
       }
     }
@@ -1491,6 +1521,7 @@ async function getCatalogPageInternal(
       ),
       condition: String(it.condition ?? it.itemCondition ?? "New"),
       publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
+      fulfillment: deriveFulfillment(it),
     }))
     .filter((i) => i.sku);
   const totalCount: number | null =

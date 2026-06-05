@@ -26,9 +26,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 const STALE_MS = 24 * 60 * 60 * 1000; // auto-sync if cache older than 24h
 
 type ConditionFilter = "ALL" | string;
+type FulfillmentFilter = "ALL" | string;
 
 function downloadCsv(rows: CatalogIdentifier[]) {
-  const header = ["SKU", "Product Name", "GTIN", "UPC"];
+  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment"];
   const escape = (v: string) => `"${(v ?? "").replace(/"/g, '""')}"`;
   // Force Excel/Sheets to treat long numeric IDs as text (no scientific notation,
   // no truncation of leading zeros) by wrapping in ="..." formula syntax.
@@ -39,7 +40,13 @@ function downloadCsv(rows: CatalogIdentifier[]) {
   const csv = [
     header.join(","),
     ...rows.map((r) =>
-      [escape(r.sku), escape(r.productName), escapeId(r.gtin), escapeId(r.upc)].join(","),
+      [
+        escape(r.sku),
+        escape(r.productName),
+        escapeId(r.gtin),
+        escapeId(r.upc),
+        escape(r.fulfillment ?? ""),
+      ].join(","),
     ),
   ].join("\r\n");
   // Prepend UTF-8 BOM so Excel opens it correctly.
@@ -72,6 +79,7 @@ function CatalogPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
+  const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("ALL");
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{ lifecycle: string; publishedStatus: string } | null>(null);
 
@@ -148,6 +156,7 @@ function CatalogPage() {
     const q = search.trim().toLowerCase();
     return items.filter((r) => {
       if (conditionFilter !== "ALL" && (r.condition ?? "") !== conditionFilter) return false;
+      if (fulfillmentFilter !== "ALL" && (r.fulfillment ?? "Unknown") !== fulfillmentFilter) return false;
       if (!q) return true;
       return (
         r.sku.toLowerCase().includes(q) ||
@@ -156,12 +165,21 @@ function CatalogPage() {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [items, search, conditionFilter]);
+  }, [items, search, conditionFilter, fulfillmentFilter]);
 
   const conditionCounts = useMemo(() => {
     const c = new Map<string, number>();
     for (const r of items) {
       const k = r.condition?.trim() || "Unknown";
+      c.set(k, (c.get(k) ?? 0) + 1);
+    }
+    return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
+  }, [items]);
+
+  const fulfillmentCounts = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const r of items) {
+      const k = r.fulfillment?.trim() || "Unknown";
       c.set(k, (c.get(k) ?? 0) + 1);
     }
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
@@ -276,6 +294,19 @@ function CatalogPage() {
               ))}
             </SelectContent>
           </Select>
+          <Select value={fulfillmentFilter} onValueChange={(v) => setFulfillmentFilter(v)}>
+            <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
+              <SelectValue placeholder="Fulfillment" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All fulfillment ({items.length.toLocaleString()})</SelectItem>
+              {fulfillmentCounts.map(([f, n]) => (
+                <SelectItem key={f} value={f}>
+                  {f} ({n.toLocaleString()})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {error && <ErrorState message={error} onRetry={() => { setError(null); void runSync(false); }} />}
@@ -293,27 +324,44 @@ function CatalogPage() {
                   <Th>Product</Th>
                   <Th>GTIN</Th>
                   <Th>UPC</Th>
+                  <Th>Fulfillment</Th>
                 </tr>
               </Thead>
               <tbody className="divide-y">
-                {visibleRows.map((row) => (
-                  <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
-                    <Td>
-                      <a href={`/sku/${row.sku}`} className="font-mono text-xs text-primary hover:underline">
-                        {row.sku}
-                      </a>
-                    </Td>
-                    <Td className="max-w-[420px] truncate">
-                      {row.productName || <span className="text-muted-foreground">—</span>}
-                    </Td>
-                    <Td className="font-mono text-xs">
-                      {row.gtin || <span className="text-muted-foreground">—</span>}
-                    </Td>
-                    <Td className="font-mono text-xs">
-                      {row.upc || <span className="text-muted-foreground">—</span>}
-                    </Td>
-                  </tr>
-                ))}
+                {visibleRows.map((row) => {
+                  const f = row.fulfillment || "Unknown";
+                  const fClass =
+                    f === "Walmart Fulfilled"
+                      ? "bg-primary/15 text-primary"
+                      : f === "Seller Fulfilled (WFS eligible)"
+                      ? "bg-status-warning/15 text-status-warning"
+                      : f === "Seller Fulfilled"
+                      ? "bg-muted text-muted-foreground"
+                      : "bg-muted text-muted-foreground";
+                  return (
+                    <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
+                      <Td>
+                        <a href={`/sku/${row.sku}`} className="font-mono text-xs text-primary hover:underline">
+                          {row.sku}
+                        </a>
+                      </Td>
+                      <Td className="max-w-[420px] truncate">
+                        {row.productName || <span className="text-muted-foreground">—</span>}
+                      </Td>
+                      <Td className="font-mono text-xs">
+                        {row.gtin || <span className="text-muted-foreground">—</span>}
+                      </Td>
+                      <Td className="font-mono text-xs">
+                        {row.upc || <span className="text-muted-foreground">—</span>}
+                      </Td>
+                      <Td>
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${fClass}`}>
+                          {f}
+                        </span>
+                      </Td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </DataTableShell>
             {truncated && (
