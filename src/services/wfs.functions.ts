@@ -1521,6 +1521,7 @@ async function getCatalogPageInternal(
       ),
       condition: String(it.condition ?? it.itemCondition ?? "New"),
       publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
+      fulfillment: deriveFulfillment(it),
     }))
     .filter((i) => i.sku);
   const totalCount: number | null =
