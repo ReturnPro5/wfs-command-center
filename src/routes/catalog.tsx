@@ -78,6 +78,12 @@ function CatalogPage() {
   const [state, setState] = useState<CatalogSyncState | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState<{
+    processed: number;
+    updated: number;
+    remaining: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
