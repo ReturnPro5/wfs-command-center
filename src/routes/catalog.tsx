@@ -168,9 +168,10 @@ function CatalogPage() {
     let totalProcessed = 0;
     let totalUpdated = 0;
     try {
+      let afterSku: string | undefined = undefined;
       // eslint-disable-next-line no-constant-condition
       while (!cancelledRef.current) {
-        const res = await backfillUnknownFulfillment({ data: { batchSize: 40 } });
+        const res = await backfillUnknownFulfillment({ data: { batchSize: 40, afterSku } });
         totalProcessed += res.processed;
         totalUpdated += res.updated;
         setBackfillProgress({
@@ -179,6 +180,7 @@ function CatalogPage() {
           remaining: res.remaining,
         });
         if (res.done || res.processed === 0) break;
+        afterSku = res.nextAfterSku ?? afterSku;
       }
       const fresh = await getCachedCatalog();
       if (cancelledRef.current) return;
