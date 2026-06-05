@@ -1396,6 +1396,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
         lifecycle: page.lifecycle,
         condition: it.condition ?? "New",
         published_status: it.publishedStatus ?? publishedStatus,
+        fulfillment: it.fulfillment ?? "Unknown",
         last_seen_at: now,
         last_synced_at: now,
       }));
@@ -1404,7 +1405,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
         const slice = rows.slice(i, i + CHUNK);
         const { error: upErr } = await supabaseAdmin
           .from("catalog_items")
-          .upsert(slice, { onConflict: "sku", ignoreDuplicates: false });
+          .upsert(slice as any, { onConflict: "sku", ignoreDuplicates: false });
         if (upErr) throw new Error(`catalog upsert failed: ${upErr.message}`);
       }
     }
