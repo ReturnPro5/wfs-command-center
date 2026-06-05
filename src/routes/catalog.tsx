@@ -220,6 +220,11 @@ function CatalogPage() {
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [items]);
 
+  const unknownCount = useMemo(
+    () => items.filter((r) => (r.fulfillment ?? "Unknown") === "Unknown").length,
+    [items]
+  );
+
   const fulfillmentCounts = useMemo(() => {
     const c = new Map<string, number>();
     for (const r of items) {
