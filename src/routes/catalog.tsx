@@ -294,6 +294,19 @@ function CatalogPage() {
               ))}
             </SelectContent>
           </Select>
+          <Select value={fulfillmentFilter} onValueChange={(v) => setFulfillmentFilter(v)}>
+            <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
+              <SelectValue placeholder="Fulfillment" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All fulfillment ({items.length.toLocaleString()})</SelectItem>
+              {fulfillmentCounts.map(([f, n]) => (
+                <SelectItem key={f} value={f}>
+                  {f} ({n.toLocaleString()})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {error && <ErrorState message={error} onRetry={() => { setError(null); void runSync(false); }} />}
