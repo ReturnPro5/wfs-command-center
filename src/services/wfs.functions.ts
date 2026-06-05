@@ -1278,12 +1278,12 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
       if (!data || data.length === 0) break;
-      for (const r of data) {
+      for (const r of data as any[]) {
         items.push({
           sku: r.sku,
           productName: r.product_name ?? "",
@@ -1292,6 +1292,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           lifecycle: r.lifecycle ?? "",
           condition: r.condition ?? "",
           publishedStatus: r.published_status ?? "",
+          fulfillment: r.fulfillment ?? "Unknown",
         });
       }
       if (data.length < PAGE) break;
