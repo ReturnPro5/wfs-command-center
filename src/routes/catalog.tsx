@@ -324,27 +324,44 @@ function CatalogPage() {
                   <Th>Product</Th>
                   <Th>GTIN</Th>
                   <Th>UPC</Th>
+                  <Th>Fulfillment</Th>
                 </tr>
               </Thead>
               <tbody className="divide-y">
-                {visibleRows.map((row) => (
-                  <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
-                    <Td>
-                      <a href={`/sku/${row.sku}`} className="font-mono text-xs text-primary hover:underline">
-                        {row.sku}
-                      </a>
-                    </Td>
-                    <Td className="max-w-[420px] truncate">
-                      {row.productName || <span className="text-muted-foreground">—</span>}
-                    </Td>
-                    <Td className="font-mono text-xs">
-                      {row.gtin || <span className="text-muted-foreground">—</span>}
-                    </Td>
-                    <Td className="font-mono text-xs">
-                      {row.upc || <span className="text-muted-foreground">—</span>}
-                    </Td>
-                  </tr>
-                ))}
+                {visibleRows.map((row) => {
+                  const f = row.fulfillment || "Unknown";
+                  const fClass =
+                    f === "Walmart Fulfilled"
+                      ? "bg-primary/15 text-primary"
+                      : f === "Seller Fulfilled (WFS eligible)"
+                      ? "bg-status-warning/15 text-status-warning"
+                      : f === "Seller Fulfilled"
+                      ? "bg-muted text-muted-foreground"
+                      : "bg-muted text-muted-foreground";
+                  return (
+                    <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
+                      <Td>
+                        <a href={`/sku/${row.sku}`} className="font-mono text-xs text-primary hover:underline">
+                          {row.sku}
+                        </a>
+                      </Td>
+                      <Td className="max-w-[420px] truncate">
+                        {row.productName || <span className="text-muted-foreground">—</span>}
+                      </Td>
+                      <Td className="font-mono text-xs">
+                        {row.gtin || <span className="text-muted-foreground">—</span>}
+                      </Td>
+                      <Td className="font-mono text-xs">
+                        {row.upc || <span className="text-muted-foreground">—</span>}
+                      </Td>
+                      <Td>
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${fClass}`}>
+                          {f}
+                        </span>
+                      </Td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </DataTableShell>
             {truncated && (
