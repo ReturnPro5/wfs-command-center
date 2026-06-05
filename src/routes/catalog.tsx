@@ -6,10 +6,12 @@ import { ErrorState, EmptyState } from "@/components/StateDisplays";
 import {
   getCachedCatalog,
   syncCatalogStep,
+  backfillUnknownFulfillment,
   type CatalogIdentifier,
   type CatalogSyncState,
 } from "@/services/wfs.functions";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/catalog")({
   component: CatalogPage,
@@ -76,6 +78,12 @@ function CatalogPage() {
   const [state, setState] = useState<CatalogSyncState | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState<{
+    processed: number;
+    updated: number;
+    remaining: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
@@ -152,6 +160,42 @@ function CatalogPage() {
     }
   }
 
+  async function runBackfillUnknown() {
+    if (backfilling || syncing) return;
+    setBackfilling(true);
+    setError(null);
+    setBackfillProgress({ processed: 0, updated: 0, remaining: 0 });
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (!cancelledRef.current) {
+        const res = await backfillUnknownFulfillment({ data: { batchSize: 40 } });
+        totalProcessed += res.processed;
+        totalUpdated += res.updated;
+        setBackfillProgress({
+          processed: totalProcessed,
+          updated: totalUpdated,
+          remaining: res.remaining,
+        });
+        if (res.done || res.processed === 0) break;
+      }
+      const fresh = await getCachedCatalog();
+      if (cancelledRef.current) return;
+      setItems(fresh.items);
+      setState(fresh.state);
+      toast.success(
+        `Backfill complete — updated ${totalUpdated.toLocaleString()} of ${totalProcessed.toLocaleString()} SKUs`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(`Backfill failed: ${msg}`);
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((r) => {
@@ -175,6 +219,11 @@ function CatalogPage() {
     }
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [items]);
+
+  const unknownCount = useMemo(
+    () => items.filter((r) => (r.fulfillment ?? "Unknown") === "Unknown").length,
+    [items]
+  );
 
   const fulfillmentCounts = useMemo(() => {
     const c = new Map<string, number>();
@@ -216,19 +265,31 @@ function CatalogPage() {
           <div className="flex gap-2">
             <button
               onClick={() => void runSync(false)}
-              disabled={syncing || loading}
+              disabled={syncing || loading || backfilling}
               className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
               {syncing ? "Syncing…" : "Sync now"}
             </button>
             <button
               onClick={() => void runSync(true)}
-              disabled={syncing || loading}
+              disabled={syncing || loading || backfilling}
               title="Re-walk the entire catalog from scratch"
               className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
               Full re-sync
             </button>
+            {unknownCount > 0 && (
+              <button
+                onClick={() => void runBackfillUnknown()}
+                disabled={syncing || loading || backfilling}
+                title="Re-query Walmart only for items currently classified as Unknown fulfillment"
+                className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
+              >
+                {backfilling
+                  ? `Backfilling… ${backfillProgress?.processed.toLocaleString() ?? 0}`
+                  : `Backfill Unknown fulfillment (${unknownCount.toLocaleString()})`}
+              </button>
+            )}
             {items.length > 0 && (
               <button
                 onClick={() => downloadCsv(filtered)}

@@ -1475,6 +1475,89 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     };
   });
 
+// ─── Backfill Unknown Fulfillment ───────────────────────
+// Re-queries Walmart for only the SKUs currently flagged "Unknown" fulfillment
+// and updates them in place — no full re-sync needed.
+export interface BackfillFulfillmentResult {
+  processed: number;
+  updated: number;
+  stillUnknown: number;
+  remaining: number;
+  done: boolean;
+}
+
+export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z.object({ batchSize: z.number().int().min(1).max(200).optional() }).parse(data ?? {})
+  )
+  .handler(async ({ data }): Promise<BackfillFulfillmentResult> => {
+    const batchSize = data.batchSize ?? 40;
+    await getWalmartAccessToken();
+
+    const { data: rows, error } = await supabaseAdmin
+      .from("catalog_items")
+      .select("sku")
+      .eq("fulfillment", "Unknown")
+      .order("sku", { ascending: true })
+      .limit(batchSize);
+    if (error) throw new Error(`backfill read failed: ${error.message}`);
+    const skus = (rows ?? []).map((r: any) => r.sku);
+
+    let updated = 0;
+    let stillUnknown = 0;
+    const now = new Date().toISOString();
+
+    const CONCURRENCY = 4;
+    let idx = 0;
+    async function worker() {
+      while (idx < skus.length) {
+        const i = idx++;
+        const sku = skus[i];
+        try {
+          const raw = await walmartApi.getItem(sku);
+          const payload = (raw as any)?.payload ?? raw;
+          const candidate =
+            (Array.isArray(payload?.ItemResponse) ? payload.ItemResponse[0] : payload?.ItemResponse) ??
+            (Array.isArray(payload?.itemResponse) ? payload.itemResponse[0] : payload?.itemResponse) ??
+            (Array.isArray(payload?.items) ? payload.items[0] : payload?.items) ??
+            payload;
+          const fulfillment = deriveFulfillment(candidate);
+          const { error: uErr } = await supabaseAdmin
+            .from("catalog_items")
+            .update({ fulfillment, last_synced_at: now })
+            .eq("sku", sku);
+          if (uErr) {
+            console.warn(`[WFS:backfill] update failed sku=${sku}: ${uErr.message}`);
+            stillUnknown++;
+            continue;
+          }
+          if (fulfillment === "Unknown") stillUnknown++;
+          else updated++;
+        } catch (e) {
+          console.warn(`[WFS:backfill] fetch failed sku=${sku}:`, (e as Error).message);
+          stillUnknown++;
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, Math.max(1, skus.length)) }, worker)
+    );
+
+    const { count } = await supabaseAdmin
+      .from("catalog_items")
+      .select("sku", { count: "exact", head: true })
+      .eq("fulfillment", "Unknown");
+
+    const remaining = count ?? 0;
+    return {
+      processed: skus.length,
+      updated,
+      stillUnknown,
+      remaining,
+      done: skus.length === 0 || remaining === 0,
+    };
+  });
+
 // Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper.
 // Walks both lifecycleStatus AND publishedStatus so the full catalog is captured.
 async function getCatalogPageInternal(
