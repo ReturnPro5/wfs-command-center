@@ -18,6 +18,7 @@ export type Database = {
         Row: {
           condition: string
           first_seen_at: string
+          fulfillment: string
           gtin: string
           last_seen_at: string
           last_synced_at: string
@@ -30,6 +31,7 @@ export type Database = {
         Insert: {
           condition?: string
           first_seen_at?: string
+          fulfillment?: string
           gtin?: string
           last_seen_at?: string
           last_synced_at?: string
@@ -42,6 +44,7 @@ export type Database = {
         Update: {
           condition?: string
           first_seen_at?: string
+          fulfillment?: string
           gtin?: string
           last_seen_at?: string
           last_synced_at?: string

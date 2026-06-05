@@ -1,0 +1,1 @@
+ALTER TABLE public.catalog_items ADD COLUMN IF NOT EXISTS fulfillment text NOT NULL DEFAULT 'Unknown';
