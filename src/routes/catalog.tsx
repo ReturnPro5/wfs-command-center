@@ -267,12 +267,24 @@ function CatalogPage() {
             </button>
             <button
               onClick={() => void runSync(true)}
-              disabled={syncing || loading}
+              disabled={syncing || loading || backfilling}
               title="Re-walk the entire catalog from scratch"
               className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
               Full re-sync
             </button>
+            {unknownCount > 0 && (
+              <button
+                onClick={() => void runBackfillUnknown()}
+                disabled={syncing || loading || backfilling}
+                title="Re-query Walmart only for items currently classified as Unknown fulfillment"
+                className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
+              >
+                {backfilling
+                  ? `Backfilling… ${backfillProgress?.processed.toLocaleString() ?? 0}`
+                  : `Backfill Unknown fulfillment (${unknownCount.toLocaleString()})`}
+              </button>
+            )}
             {items.length > 0 && (
               <button
                 onClick={() => downloadCsv(filtered)}
