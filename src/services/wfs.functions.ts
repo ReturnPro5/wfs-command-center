@@ -1120,11 +1120,13 @@ export interface CatalogIdentifier {
   fulfillment?: FulfillmentType | string;
 }
 
-// Derive fulfillment label from Walmart /v3/items fields.
-// shippingProgramType === "WFS" → item is actively WFS-fulfilled.
-// wfsEnabled true (but not in WFS program) → seller-fulfilled, eligible for WFS.
-// Otherwise → seller-fulfilled.
-function deriveFulfillment(it: any): FulfillmentType {
+// Derive fulfillment label from Walmart data.
+// Priority order:
+// 1) WFS inventory membership by SKU → item is actively Walmart-fulfilled.
+// 2) /v3/items fulfillment fields when present.
+// 3) If we know the SKU is not in WFS inventory, classify as seller-fulfilled.
+function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
+  const sku = String(it?.sku ?? it?.SKU ?? it?.mart_sku ?? "");
   const ship = String(
     it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
   ).toUpperCase();
@@ -1134,10 +1136,17 @@ function deriveFulfillment(it: any): FulfillmentType {
     String(wfsEnabledRaw).toLowerCase() === "true" ||
     String(wfsEnabledRaw).toLowerCase() === "yes";
 
+  if (sku && wfsSkuSet?.has(sku)) return "Walmart Fulfilled";
   if (ship.includes("WFS")) return "Walmart Fulfilled";
   if (wfsEnabled) return "Seller Fulfilled (WFS eligible)";
+  if (sku && wfsSkuSet && !wfsSkuSet.has(sku)) return "Seller Fulfilled";
   if (ship || wfsEnabledRaw !== undefined) return "Seller Fulfilled";
   return "Unknown";
+}
+
+async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
+  const inventory = await fetchAllInventory();
+  return new Set(inventory.map((item) => item.sku).filter(Boolean));
 }
 
 export interface CatalogPage {
@@ -1168,6 +1177,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<CatalogPage> => {
     await getWalmartAccessToken();
+    const wfsSkuSet = await getWfsFulfilledSkuSet();
     const lifecycle = data.lifecycle ?? "ACTIVE";
     const publishedStatus = data.publishedStatus ?? "PUBLISHED";
     const cursor = data.cursor ?? "*"; // "*" = first page in cursor mode
@@ -1213,7 +1223,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
         ),
         condition: String(it.condition ?? it.itemCondition ?? "New"),
         publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
-        fulfillment: deriveFulfillment(it),
+        fulfillment: deriveFulfillment(it, wfsSkuSet),
       }))
       .filter((i) => i.sku);
 
@@ -1498,6 +1508,7 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<BackfillFulfillmentResult & { nextAfterSku: string | null }> => {
     const batchSize = data.batchSize ?? 40;
     await getWalmartAccessToken();
+    const wfsSkuSet = await getWfsFulfilledSkuSet();
 
     // Walk Unknown rows by sku cursor so each SKU is touched at most once per run,
     // even if the update leaves it as "Unknown" (otherwise we'd re-fetch forever).
@@ -1531,7 +1542,7 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
             (Array.isArray(payload?.itemResponse) ? payload.itemResponse[0] : payload?.itemResponse) ??
             (Array.isArray(payload?.items) ? payload.items[0] : payload?.items) ??
             payload;
-          const fulfillment = deriveFulfillment(candidate);
+          const fulfillment = deriveFulfillment(candidate, wfsSkuSet);
           const { error: uErr } = await supabaseAdmin
             .from("catalog_items")
             .update({ fulfillment, last_synced_at: now })
@@ -1579,6 +1590,7 @@ async function getCatalogPageInternal(
   publishedStatus: string = "PUBLISHED"
 ): Promise<CatalogPage> {
   await getWalmartAccessToken();
+  const wfsSkuSet = await getWfsFulfilledSkuSet();
   const cursor = cursorIn ?? "*";
 
   const pubIdx = PUBLISHED_STATUS_ORDER.indexOf(publishedStatus);
@@ -1617,7 +1629,7 @@ async function getCatalogPageInternal(
       ),
       condition: String(it.condition ?? it.itemCondition ?? "New"),
       publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
-      fulfillment: deriveFulfillment(it),
+      fulfillment: deriveFulfillment(it, wfsSkuSet),
     }))
     .filter((i) => i.sku);
   const totalCount: number | null =
