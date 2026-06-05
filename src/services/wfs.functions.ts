@@ -1488,18 +1488,28 @@ export interface BackfillFulfillmentResult {
 
 export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
-    z.object({ batchSize: z.number().int().min(1).max(200).optional() }).parse(data ?? {})
+    z
+      .object({
+        batchSize: z.number().int().min(1).max(200).optional(),
+        afterSku: z.string().optional(),
+      })
+      .parse(data ?? {})
   )
-  .handler(async ({ data }): Promise<BackfillFulfillmentResult> => {
+  .handler(async ({ data }): Promise<BackfillFulfillmentResult & { nextAfterSku: string | null }> => {
     const batchSize = data.batchSize ?? 40;
     await getWalmartAccessToken();
 
-    const { data: rows, error } = await supabaseAdmin
+    // Walk Unknown rows by sku cursor so each SKU is touched at most once per run,
+    // even if the update leaves it as "Unknown" (otherwise we'd re-fetch forever).
+    let query = supabaseAdmin
       .from("catalog_items")
       .select("sku")
       .eq("fulfillment", "Unknown")
       .order("sku", { ascending: true })
       .limit(batchSize);
+    if (data.afterSku) query = query.gt("sku", data.afterSku);
+
+    const { data: rows, error } = await query;
     if (error) throw new Error(`backfill read failed: ${error.message}`);
     const skus = (rows ?? []).map((r: any) => r.sku);
 
@@ -1549,12 +1559,15 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
       .eq("fulfillment", "Unknown");
 
     const remaining = count ?? 0;
+    const nextAfterSku = skus.length > 0 ? skus[skus.length - 1] : null;
     return {
       processed: skus.length,
       updated,
       stillUnknown,
       remaining,
-      done: skus.length === 0 || remaining === 0,
+      // Stop when this batch returned fewer rows than requested — we've reached the end.
+      done: skus.length < batchSize,
+      nextAfterSku,
     };
   });
 
