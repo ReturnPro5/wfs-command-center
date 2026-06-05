@@ -1213,6 +1213,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
         ),
         condition: String(it.condition ?? it.itemCondition ?? "New"),
         publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
+        fulfillment: deriveFulfillment(it),
       }))
       .filter((i) => i.sku);
 
