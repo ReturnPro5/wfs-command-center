@@ -26,9 +26,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 const STALE_MS = 24 * 60 * 60 * 1000; // auto-sync if cache older than 24h
 
 type ConditionFilter = "ALL" | string;
+type FulfillmentFilter = "ALL" | string;
 
 function downloadCsv(rows: CatalogIdentifier[]) {
-  const header = ["SKU", "Product Name", "GTIN", "UPC"];
+  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment"];
   const escape = (v: string) => `"${(v ?? "").replace(/"/g, '""')}"`;
   // Force Excel/Sheets to treat long numeric IDs as text (no scientific notation,
   // no truncation of leading zeros) by wrapping in ="..." formula syntax.
@@ -39,7 +40,13 @@ function downloadCsv(rows: CatalogIdentifier[]) {
   const csv = [
     header.join(","),
     ...rows.map((r) =>
-      [escape(r.sku), escape(r.productName), escapeId(r.gtin), escapeId(r.upc)].join(","),
+      [
+        escape(r.sku),
+        escape(r.productName),
+        escapeId(r.gtin),
+        escapeId(r.upc),
+        escape(r.fulfillment ?? ""),
+      ].join(","),
     ),
   ].join("\r\n");
   // Prepend UTF-8 BOM so Excel opens it correctly.
