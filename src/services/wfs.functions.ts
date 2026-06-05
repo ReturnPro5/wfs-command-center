@@ -1103,6 +1103,12 @@ function aggregateDailyTrends(orders: RawOrder[]): SalesTrend[] {
 }
 
 // ─── Catalog Identifiers (SKU / GTIN / UPC) ─────────────
+export type FulfillmentType =
+  | "Walmart Fulfilled"
+  | "Seller Fulfilled (WFS eligible)"
+  | "Seller Fulfilled"
+  | "Unknown";
+
 export interface CatalogIdentifier {
   sku: string;
   productName: string;
@@ -1111,6 +1117,27 @@ export interface CatalogIdentifier {
   lifecycle?: "ACTIVE" | "ARCHIVED" | "RETIRED" | string;
   condition?: string;
   publishedStatus?: string;
+  fulfillment?: FulfillmentType | string;
+}
+
+// Derive fulfillment label from Walmart /v3/items fields.
+// shippingProgramType === "WFS" → item is actively WFS-fulfilled.
+// wfsEnabled true (but not in WFS program) → seller-fulfilled, eligible for WFS.
+// Otherwise → seller-fulfilled.
+function deriveFulfillment(it: any): FulfillmentType {
+  const ship = String(
+    it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
+  ).toUpperCase();
+  const wfsEnabledRaw = it?.wfsEnabled ?? it?.wfs_enabled ?? it?.isWfsEnabled;
+  const wfsEnabled =
+    wfsEnabledRaw === true ||
+    String(wfsEnabledRaw).toLowerCase() === "true" ||
+    String(wfsEnabledRaw).toLowerCase() === "yes";
+
+  if (ship.includes("WFS")) return "Walmart Fulfilled";
+  if (wfsEnabled) return "Seller Fulfilled (WFS eligible)";
+  if (ship || wfsEnabledRaw !== undefined) return "Seller Fulfilled";
+  return "Unknown";
 }
 
 export interface CatalogPage {
