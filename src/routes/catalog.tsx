@@ -160,6 +160,42 @@ function CatalogPage() {
     }
   }
 
+  async function runBackfillUnknown() {
+    if (backfilling || syncing) return;
+    setBackfilling(true);
+    setError(null);
+    setBackfillProgress({ processed: 0, updated: 0, remaining: 0 });
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (!cancelledRef.current) {
+        const res = await backfillUnknownFulfillment({ data: { batchSize: 40 } });
+        totalProcessed += res.processed;
+        totalUpdated += res.updated;
+        setBackfillProgress({
+          processed: totalProcessed,
+          updated: totalUpdated,
+          remaining: res.remaining,
+        });
+        if (res.done || res.processed === 0) break;
+      }
+      const fresh = await getCachedCatalog();
+      if (cancelledRef.current) return;
+      setItems(fresh.items);
+      setState(fresh.state);
+      toast.success(
+        `Backfill complete — updated ${totalUpdated.toLocaleString()} of ${totalProcessed.toLocaleString()} SKUs`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(`Backfill failed: ${msg}`);
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((r) => {
