@@ -428,6 +428,7 @@ function CatalogPage() {
                   <Th>GTIN</Th>
                   <Th>UPC</Th>
                   <Th>Fulfillment</Th>
+                  <Th>SDS Required</Th>
                 </tr>
               </Thead>
               <tbody className="divide-y">
@@ -440,6 +441,12 @@ function CatalogPage() {
                       ? "bg-status-warning/15 text-status-warning"
                       : f === "Seller Fulfilled"
                       ? "bg-muted text-muted-foreground"
+                      : "bg-muted text-muted-foreground";
+                  const sdsClass =
+                    row.sds.requirement === "Likely required"
+                      ? "bg-status-critical/15 text-status-critical"
+                      : row.sds.requirement === "Possibly required"
+                      ? "bg-status-warning/15 text-status-warning"
                       : "bg-muted text-muted-foreground";
                   return (
                     <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
@@ -460,6 +467,14 @@ function CatalogPage() {
                       <Td>
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${fClass}`}>
                           {f}
+                        </span>
+                      </Td>
+                      <Td>
+                        <span
+                          title={row.sds.reasons.length ? `Triggered by: ${row.sds.reasons.join(", ")}` : "No SDS keywords detected"}
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${sdsClass}`}
+                        >
+                          {row.sds.requirement}
                         </span>
                       </Td>
                     </tr>
