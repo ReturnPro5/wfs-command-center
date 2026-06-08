@@ -12,6 +12,7 @@ import {
 } from "@/services/wfs.functions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { classifySds, type SdsRequirement } from "@/lib/sdsClassifier";
 
 export const Route = createFileRoute("/catalog")({
   component: CatalogPage,
