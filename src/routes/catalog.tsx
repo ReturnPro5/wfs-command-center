@@ -30,9 +30,10 @@ const STALE_MS = 24 * 60 * 60 * 1000; // auto-sync if cache older than 24h
 
 type ConditionFilter = "ALL" | string;
 type FulfillmentFilter = "ALL" | string;
+type SdsFilter = "ALL" | SdsRequirement;
 
 function downloadCsv(rows: CatalogIdentifier[]) {
-  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment"];
+  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment", "SDS Requirement", "SDS Reasons"];
   const escape = (v: string) => `"${(v ?? "").replace(/"/g, '""')}"`;
   // Force Excel/Sheets to treat long numeric IDs as text (no scientific notation,
   // no truncation of leading zeros) by wrapping in ="..." formula syntax.
@@ -42,15 +43,18 @@ function downloadCsv(rows: CatalogIdentifier[]) {
   };
   const csv = [
     header.join(","),
-    ...rows.map((r) =>
-      [
+    ...rows.map((r) => {
+      const sds = classifySds(r.productName);
+      return [
         escape(r.sku),
         escape(r.productName),
         escapeId(r.gtin),
         escapeId(r.upc),
         escape(r.fulfillment ?? ""),
-      ].join(","),
-    ),
+        escape(sds.requirement),
+        escape(sds.reasons.join("; ")),
+      ].join(",");
+    }),
   ].join("\r\n");
   // Prepend UTF-8 BOM so Excel opens it correctly.
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
