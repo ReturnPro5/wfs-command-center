@@ -93,6 +93,7 @@ function CatalogPage() {
   const [search, setSearch] = useState("");
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
   const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("ALL");
+  const [sdsFilter, setSdsFilter] = useState<SdsFilter>("ALL");
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{ lifecycle: string; publishedStatus: string } | null>(null);
 
