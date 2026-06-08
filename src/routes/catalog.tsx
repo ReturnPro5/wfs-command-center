@@ -393,6 +393,23 @@ function CatalogPage() {
               ))}
             </SelectContent>
           </Select>
+          <Select value={sdsFilter} onValueChange={(v) => setSdsFilter(v as SdsFilter)}>
+            <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
+              <SelectValue placeholder="SDS requirement" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All SDS statuses ({items.length.toLocaleString()})</SelectItem>
+              <SelectItem value="Likely required">
+                Likely required ({(sdsCounts.get("Likely required") ?? 0).toLocaleString()})
+              </SelectItem>
+              <SelectItem value="Possibly required">
+                Possibly required ({(sdsCounts.get("Possibly required") ?? 0).toLocaleString()})
+              </SelectItem>
+              <SelectItem value="Not required">
+                Not required ({(sdsCounts.get("Not required") ?? 0).toLocaleString()})
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {error && <ErrorState message={error} onRetry={() => { setError(null); void runSync(false); }} />}
