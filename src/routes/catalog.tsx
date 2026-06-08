@@ -12,6 +12,7 @@ import {
 } from "@/services/wfs.functions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { classifySds, type SdsRequirement } from "@/lib/sdsClassifier";
 
 export const Route = createFileRoute("/catalog")({
   component: CatalogPage,
@@ -29,9 +30,10 @@ const STALE_MS = 24 * 60 * 60 * 1000; // auto-sync if cache older than 24h
 
 type ConditionFilter = "ALL" | string;
 type FulfillmentFilter = "ALL" | string;
+type SdsFilter = "ALL" | SdsRequirement;
 
 function downloadCsv(rows: CatalogIdentifier[]) {
-  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment"];
+  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment", "SDS Requirement", "SDS Reasons"];
   const escape = (v: string) => `"${(v ?? "").replace(/"/g, '""')}"`;
   // Force Excel/Sheets to treat long numeric IDs as text (no scientific notation,
   // no truncation of leading zeros) by wrapping in ="..." formula syntax.
@@ -41,15 +43,18 @@ function downloadCsv(rows: CatalogIdentifier[]) {
   };
   const csv = [
     header.join(","),
-    ...rows.map((r) =>
-      [
+    ...rows.map((r) => {
+      const sds = classifySds(r.productName);
+      return [
         escape(r.sku),
         escape(r.productName),
         escapeId(r.gtin),
         escapeId(r.upc),
         escape(r.fulfillment ?? ""),
-      ].join(","),
-    ),
+        escape(sds.requirement),
+        escape(sds.reasons.join("; ")),
+      ].join(",");
+    }),
   ].join("\r\n");
   // Prepend UTF-8 BOM so Excel opens it correctly.
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
@@ -88,6 +93,7 @@ function CatalogPage() {
   const [search, setSearch] = useState("");
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
   const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("ALL");
+  const [sdsFilter, setSdsFilter] = useState<SdsFilter>("ALL");
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{ lifecycle: string; publishedStatus: string } | null>(null);
 
@@ -198,11 +204,18 @@ function CatalogPage() {
     }
   }
 
+  // Augment items with derived SDS classification (memoized once per items change).
+  const itemsWithSds = useMemo(
+    () => items.map((r) => ({ ...r, sds: classifySds(r.productName) })),
+    [items]
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter((r) => {
+    return itemsWithSds.filter((r) => {
       if (conditionFilter !== "ALL" && (r.condition ?? "") !== conditionFilter) return false;
       if (fulfillmentFilter !== "ALL" && (r.fulfillment ?? "Unknown") !== fulfillmentFilter) return false;
+      if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
       if (!q) return true;
       return (
         r.sku.toLowerCase().includes(q) ||
@@ -211,7 +224,7 @@ function CatalogPage() {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [items, search, conditionFilter, fulfillmentFilter]);
+  }, [itemsWithSds, search, conditionFilter, fulfillmentFilter, sdsFilter]);
 
   const conditionCounts = useMemo(() => {
     const c = new Map<string, number>();
@@ -235,6 +248,16 @@ function CatalogPage() {
     }
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [items]);
+
+  const sdsCounts = useMemo(() => {
+    const c = new Map<SdsRequirement, number>([
+      ["Likely required", 0],
+      ["Possibly required", 0],
+      ["Not required", 0],
+    ]);
+    for (const r of itemsWithSds) c.set(r.sds.requirement, (c.get(r.sds.requirement) ?? 0) + 1);
+    return c;
+  }, [itemsWithSds]);
 
   const RENDER_CAP = 2000;
   const visibleRows = filtered.slice(0, RENDER_CAP);
@@ -370,6 +393,23 @@ function CatalogPage() {
               ))}
             </SelectContent>
           </Select>
+          <Select value={sdsFilter} onValueChange={(v) => setSdsFilter(v as SdsFilter)}>
+            <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
+              <SelectValue placeholder="SDS requirement" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All SDS statuses ({items.length.toLocaleString()})</SelectItem>
+              <SelectItem value="Likely required">
+                Likely required ({(sdsCounts.get("Likely required") ?? 0).toLocaleString()})
+              </SelectItem>
+              <SelectItem value="Possibly required">
+                Possibly required ({(sdsCounts.get("Possibly required") ?? 0).toLocaleString()})
+              </SelectItem>
+              <SelectItem value="Not required">
+                Not required ({(sdsCounts.get("Not required") ?? 0).toLocaleString()})
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {error && <ErrorState message={error} onRetry={() => { setError(null); void runSync(false); }} />}
@@ -388,6 +428,7 @@ function CatalogPage() {
                   <Th>GTIN</Th>
                   <Th>UPC</Th>
                   <Th>Fulfillment</Th>
+                  <Th>SDS Required</Th>
                 </tr>
               </Thead>
               <tbody className="divide-y">
@@ -400,6 +441,12 @@ function CatalogPage() {
                       ? "bg-status-warning/15 text-status-warning"
                       : f === "Seller Fulfilled"
                       ? "bg-muted text-muted-foreground"
+                      : "bg-muted text-muted-foreground";
+                  const sdsClass =
+                    row.sds.requirement === "Likely required"
+                      ? "bg-status-critical/15 text-status-critical"
+                      : row.sds.requirement === "Possibly required"
+                      ? "bg-status-warning/15 text-status-warning"
                       : "bg-muted text-muted-foreground";
                   return (
                     <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
@@ -420,6 +467,14 @@ function CatalogPage() {
                       <Td>
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${fClass}`}>
                           {f}
+                        </span>
+                      </Td>
+                      <Td>
+                        <span
+                          title={row.sds.reasons.length ? `Triggered by: ${row.sds.reasons.join(", ")}` : "No SDS keywords detected"}
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${sdsClass}`}
+                        >
+                          {row.sds.requirement}
                         </span>
                       </Td>
                     </tr>
