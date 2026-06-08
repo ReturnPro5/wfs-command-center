@@ -204,11 +204,18 @@ function CatalogPage() {
     }
   }
 
+  // Augment items with derived SDS classification (memoized once per items change).
+  const itemsWithSds = useMemo(
+    () => items.map((r) => ({ ...r, sds: classifySds(r.productName) })),
+    [items]
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter((r) => {
+    return itemsWithSds.filter((r) => {
       if (conditionFilter !== "ALL" && (r.condition ?? "") !== conditionFilter) return false;
       if (fulfillmentFilter !== "ALL" && (r.fulfillment ?? "Unknown") !== fulfillmentFilter) return false;
+      if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
       if (!q) return true;
       return (
         r.sku.toLowerCase().includes(q) ||
@@ -217,7 +224,7 @@ function CatalogPage() {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [items, search, conditionFilter, fulfillmentFilter]);
+  }, [itemsWithSds, search, conditionFilter, fulfillmentFilter, sdsFilter]);
 
   const conditionCounts = useMemo(() => {
     const c = new Map<string, number>();
@@ -241,6 +248,16 @@ function CatalogPage() {
     }
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [items]);
+
+  const sdsCounts = useMemo(() => {
+    const c = new Map<SdsRequirement, number>([
+      ["Likely required", 0],
+      ["Possibly required", 0],
+      ["Not required", 0],
+    ]);
+    for (const r of itemsWithSds) c.set(r.sds.requirement, (c.get(r.sds.requirement) ?? 0) + 1);
+    return c;
+  }, [itemsWithSds]);
 
   const RENDER_CAP = 2000;
   const visibleRows = filtered.slice(0, RENDER_CAP);
