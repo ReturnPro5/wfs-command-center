@@ -300,7 +300,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
 
       {eligibleAll.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No seller-fulfilled items found in the cached catalog. Sync the catalog first.
+          No Open Box seller-fulfilled items found in the cached catalog. Sync the catalog first.
         </p>
       )}
 
