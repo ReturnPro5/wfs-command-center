@@ -1695,7 +1695,10 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       .parse(data)
   )
   .handler(async ({ data }): Promise<WfsConversionRunResult> => {
-    const feedType = process.env.WALMART_WFS_FEED_TYPE || "MP_WFS_ITEM";
+    // Walmart's "Convert Seller-Fulfilled item to WFS" uses feedType=WFS
+    // (the WFS Item Spec). MP_WFS_ITEM is for new WFS item setup, which is
+    // a different flow. Override via WALMART_WFS_FEED_TYPE if needed.
+    const feedType = process.env.WALMART_WFS_FEED_TYPE || "WFS";
 
     const { data: rows, error: readErr } = await supabaseAdmin
       .from("catalog_items")
