@@ -1847,3 +1847,322 @@ export const listWfsConversionRuns = createServerFn({ method: "GET" }).handler(
     }));
   }
 );
+
+// ─── Catalog Enrichment ─────────────────────────────────
+// Pulls extra SupplierItem attributes (brand, manufacturer, price, image,
+// dimensions, country of origin, sub category, etc.) from Walmart's
+// /v3/items/{sku} endpoint and stores them on catalog_items so the WFS
+// convert feed can be built without per-SKU manual data entry.
+//
+// Walmart's items endpoint returns most descriptive attributes but does NOT
+// reliably return shipping weight/dimensions or country of origin — those
+// fields are stored in the item spec / setup data. We capture what we can
+// and mark the row as "partial" so the UI can flag what still needs manual
+// entry before submission.
+
+type EnrichmentStatus = "pending" | "enriched" | "partial" | "error";
+
+interface EnrichedFields {
+  brand: string;
+  manufacturer: string;
+  short_description: string;
+  main_image_url: string;
+  price: number | null;
+  currency: string;
+  product_type: string;
+  category: string;
+  sub_category: string;
+  country_of_origin: string;
+  shipping_weight: number | null;
+  shipping_weight_unit: string;
+  shipping_length: number | null;
+  shipping_width: number | null;
+  shipping_height: number | null;
+  shipping_dim_unit: string;
+}
+
+const REQUIRED_FOR_WFS: Array<keyof EnrichedFields> = [
+  "brand",
+  "main_image_url",
+  "price",
+  "sub_category",
+  "country_of_origin",
+  "shipping_weight",
+  "shipping_length",
+  "shipping_width",
+  "shipping_height",
+];
+
+function extractAdditionalAttr(attrs: any, names: string[]): string {
+  if (!attrs) return "";
+  const list = Array.isArray(attrs) ? attrs : attrs?.additionalProductAttribute ?? [];
+  if (!Array.isArray(list)) return "";
+  const wanted = new Set(names.map((n) => n.toLowerCase()));
+  for (const a of list) {
+    const k = String(a?.productAttributeName ?? a?.name ?? "").toLowerCase();
+    if (wanted.has(k)) {
+      const v = a?.productAttributeValue ?? a?.value ?? "";
+      return Array.isArray(v) ? String(v[0] ?? "") : String(v ?? "");
+    }
+  }
+  return "";
+}
+
+function toNumberOrNull(v: any): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseEnrichedFields(raw: any): EnrichedFields {
+  const payload = raw?.payload ?? raw ?? {};
+  const candidate =
+    (Array.isArray(payload?.ItemResponse) ? payload.ItemResponse[0] : payload?.ItemResponse) ??
+    (Array.isArray(payload?.itemResponse) ? payload.itemResponse[0] : payload?.itemResponse) ??
+    (Array.isArray(payload?.items) ? payload.items[0] : payload?.items) ??
+    payload;
+  const c = candidate ?? {};
+  const attrs = c?.additionalProductAttributes ?? c?.AdditionalProductAttributes;
+  const priceAmt = toNumberOrNull(c?.price?.amount ?? c?.price);
+  const currency = String(c?.price?.currency ?? c?.currency ?? "USD") || "USD";
+
+  return {
+    brand: String(c?.brand ?? extractAdditionalAttr(attrs, ["brand"]) ?? ""),
+    manufacturer: String(
+      c?.manufacturer ??
+        extractAdditionalAttr(attrs, ["manufacturer", "manufacturer_name"]) ??
+        ""
+    ),
+    short_description: String(
+      c?.shortDescription ?? c?.shortdescription ?? c?.productDescription ?? ""
+    ),
+    main_image_url: String(c?.mainImageUrl ?? c?.imageUrl ?? c?.primaryImage ?? ""),
+    price: priceAmt,
+    currency,
+    product_type: String(c?.productType ?? c?.productSubType ?? ""),
+    category: String(c?.productCategory ?? c?.category ?? ""),
+    sub_category: String(
+      c?.subCategory ??
+        extractAdditionalAttr(attrs, ["sub_category", "subcategory"]) ??
+        ""
+    ),
+    country_of_origin: String(
+      extractAdditionalAttr(attrs, [
+        "country_of_origin",
+        "country_of_origin_textiles",
+        "country_of_origin_assembly",
+        "countryoforiginassembly",
+      ]) ?? ""
+    ),
+    shipping_weight: toNumberOrNull(
+      c?.shippingWeight?.value ??
+        c?.shippingWeight ??
+        extractAdditionalAttr(attrs, ["shipping_weight", "weight"])
+    ),
+    shipping_weight_unit: String(c?.shippingWeight?.unit ?? "lb") || "lb",
+    shipping_length: toNumberOrNull(
+      c?.shippingLength?.value ??
+        c?.shippingLength ??
+        extractAdditionalAttr(attrs, ["shipping_length", "length"])
+    ),
+    shipping_width: toNumberOrNull(
+      c?.shippingWidth?.value ??
+        c?.shippingWidth ??
+        extractAdditionalAttr(attrs, ["shipping_width", "width"])
+    ),
+    shipping_height: toNumberOrNull(
+      c?.shippingHeight?.value ??
+        c?.shippingHeight ??
+        extractAdditionalAttr(attrs, ["shipping_height", "height"])
+    ),
+    shipping_dim_unit: String(c?.shippingLength?.unit ?? "in") || "in",
+  };
+}
+
+function classifyEnrichment(fields: EnrichedFields): EnrichmentStatus {
+  for (const k of REQUIRED_FOR_WFS) {
+    const v = fields[k];
+    if (v === null || v === undefined || v === "") return "partial";
+  }
+  return "enriched";
+}
+
+export interface EnrichCatalogResult {
+  processed: number;
+  enriched: number;
+  partial: number;
+  failed: number;
+  remaining: number;
+  done: boolean;
+  nextAfterSku: string | null;
+}
+
+export const enrichCatalogStep = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        batchSize: z.number().int().min(1).max(100).optional(),
+        afterSku: z.string().optional(),
+        reenrich: z.boolean().optional(),
+      })
+      .parse(data ?? {})
+  )
+  .handler(async ({ data }): Promise<EnrichCatalogResult> => {
+    const batchSize = data.batchSize ?? 25;
+    await getWalmartAccessToken();
+
+    let query = supabaseAdmin
+      .from("catalog_items")
+      .select("sku")
+      .order("sku", { ascending: true })
+      .limit(batchSize);
+    if (!data.reenrich) {
+      query = query.in("enrichment_status", ["pending", "error"]);
+    }
+    if (data.afterSku) query = query.gt("sku", data.afterSku);
+
+    const { data: rows, error } = await query;
+    if (error) throw new Error(`enrichment read failed: ${error.message}`);
+    const skus = (rows ?? []).map((r: any) => r.sku);
+
+    let enriched = 0;
+    let partial = 0;
+    let failed = 0;
+    const now = new Date().toISOString();
+
+    const CONCURRENCY = 4;
+    let idx = 0;
+    async function worker() {
+      while (idx < skus.length) {
+        const i = idx++;
+        const sku = skus[i];
+        try {
+          const raw = await walmartApi.getItem(sku);
+          const fields = parseEnrichedFields(raw);
+          const status = classifyEnrichment(fields);
+          const { error: uErr } = await supabaseAdmin
+            .from("catalog_items")
+            .update({
+              ...fields,
+              enrichment_status: status,
+              enrichment_error: null,
+              enriched_at: now,
+              enrichment_raw: raw as any,
+              last_synced_at: now,
+            })
+            .eq("sku", sku);
+          if (uErr) {
+            failed++;
+            console.warn(`[WFS:enrich] update failed sku=${sku}: ${uErr.message}`);
+            continue;
+          }
+          if (status === "enriched") enriched++;
+          else partial++;
+        } catch (e) {
+          failed++;
+          const msg = e instanceof Error ? e.message : String(e);
+          console.warn(`[WFS:enrich] fetch failed sku=${sku}:`, msg);
+          await supabaseAdmin
+            .from("catalog_items")
+            .update({
+              enrichment_status: "error",
+              enrichment_error: msg.slice(0, 500),
+              enriched_at: now,
+            })
+            .eq("sku", sku);
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, Math.max(1, skus.length)) }, worker)
+    );
+
+    const { count: pendingCount } = await supabaseAdmin
+      .from("catalog_items")
+      .select("sku", { count: "exact", head: true })
+      .in("enrichment_status", ["pending", "error"]);
+
+    const nextAfterSku = skus.length > 0 ? skus[skus.length - 1] : null;
+    const done = skus.length < batchSize;
+
+    await supabaseAdmin
+      .from("catalog_enrichment_state")
+      .update({
+        status: done ? "idle" : "running",
+        cursor: done ? null : nextAfterSku,
+        last_run_at: now,
+        ...(done ? { last_full_run_at: now } : {}),
+        processed_this_run: skus.length,
+        enriched_this_run: enriched,
+        partial_this_run: partial,
+        failed_this_run: failed,
+        error: null,
+      })
+      .eq("id", 1);
+
+    return {
+      processed: skus.length,
+      enriched,
+      partial,
+      failed,
+      remaining: pendingCount ?? 0,
+      done,
+      nextAfterSku,
+    };
+  });
+
+export interface EnrichmentOverview {
+  state: {
+    status: string;
+    cursor: string | null;
+    lastRunAt: string | null;
+    lastFullRunAt: string | null;
+    error: string | null;
+  };
+  counts: {
+    total: number;
+    enriched: number;
+    partial: number;
+    pending: number;
+    errored: number;
+  };
+}
+
+export const getEnrichmentOverview = createServerFn({ method: "GET" }).handler(
+  async (): Promise<EnrichmentOverview> => {
+    const { data: stateRow } = await supabaseAdmin
+      .from("catalog_enrichment_state")
+      .select("status, cursor, last_run_at, last_full_run_at, error")
+      .eq("id", 1)
+      .maybeSingle();
+
+    async function countBy(status: string | string[]) {
+      let q = supabaseAdmin.from("catalog_items").select("sku", { count: "exact", head: true });
+      q = Array.isArray(status) ? q.in("enrichment_status", status) : q.eq("enrichment_status", status);
+      const { count } = await q;
+      return count ?? 0;
+    }
+
+    const [total, enriched, partial, pending, errored] = await Promise.all([
+      supabaseAdmin
+        .from("catalog_items")
+        .select("sku", { count: "exact", head: true })
+        .then((r) => r.count ?? 0),
+      countBy("enriched"),
+      countBy("partial"),
+      countBy("pending"),
+      countBy("error"),
+    ]);
+
+    return {
+      state: {
+        status: (stateRow as any)?.status ?? "idle",
+        cursor: (stateRow as any)?.cursor ?? null,
+        lastRunAt: (stateRow as any)?.last_run_at ?? null,
+        lastFullRunAt: (stateRow as any)?.last_full_run_at ?? null,
+        error: (stateRow as any)?.error ?? null,
+      },
+      counts: { total, enriched, partial, pending, errored },
+    };
+  }
+);
