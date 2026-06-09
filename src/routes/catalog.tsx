@@ -366,133 +366,147 @@ function CatalogPage() {
           </section>
         )}
 
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="w-full sm:w-96">
-            <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
-          </div>
-          <Select value={conditionFilter} onValueChange={(v) => setConditionFilter(v)}>
-            <SelectTrigger className="w-full sm:w-64 bg-secondary border-border">
-              <SelectValue placeholder="Item condition" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All conditions ({items.length.toLocaleString()})</SelectItem>
-              {conditionCounts.map(([cond, n]) => (
-                <SelectItem key={cond} value={cond}>
-                  {cond} ({n.toLocaleString()})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={fulfillmentFilter} onValueChange={(v) => setFulfillmentFilter(v)}>
-            <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
-              <SelectValue placeholder="Fulfillment" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All fulfillment ({items.length.toLocaleString()})</SelectItem>
-              {fulfillmentCounts.map(([f, n]) => (
-                <SelectItem key={f} value={f}>
-                  {f} ({n.toLocaleString()})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={sdsFilter} onValueChange={(v) => setSdsFilter(v as SdsFilter)}>
-            <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
-              <SelectValue placeholder="SDS requirement" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All SDS statuses ({items.length.toLocaleString()})</SelectItem>
-              <SelectItem value="Likely required">
-                Likely required ({(sdsCounts.get("Likely required") ?? 0).toLocaleString()})
-              </SelectItem>
-              <SelectItem value="Possibly required">
-                Possibly required ({(sdsCounts.get("Possibly required") ?? 0).toLocaleString()})
-              </SelectItem>
-              <SelectItem value="Not required">
-                Not required ({(sdsCounts.get("Not required") ?? 0).toLocaleString()})
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
         {error && <ErrorState message={error} onRetry={() => { setError(null); void runSync(false); }} />}
 
         {!error && !loading && items.length === 0 && !syncing && (
           <EmptyState message="No items cached yet. Click 'Sync now' to fetch your catalog." />
         )}
 
-        {visibleRows.length > 0 && (
-          <>
-            <DataTableShell>
-              <Thead>
-                <tr>
-                  <Th>SKU</Th>
-                  <Th>Product</Th>
-                  <Th>GTIN</Th>
-                  <Th>UPC</Th>
-                  <Th>Fulfillment</Th>
-                  <Th>SDS Required</Th>
-                </tr>
-              </Thead>
-              <tbody className="divide-y">
-                {visibleRows.map((row) => {
-                  const f = row.fulfillment || "Unknown";
-                  const fClass =
-                    f === "Walmart Fulfilled"
-                      ? "bg-primary/15 text-primary"
-                      : f === "Seller Fulfilled (WFS eligible)"
-                      ? "bg-status-warning/15 text-status-warning"
-                      : f === "Seller Fulfilled"
-                      ? "bg-muted text-muted-foreground"
-                      : "bg-muted text-muted-foreground";
-                  const sdsClass =
-                    row.sds.requirement === "Likely required"
-                      ? "bg-status-critical/15 text-status-critical"
-                      : row.sds.requirement === "Possibly required"
-                      ? "bg-status-warning/15 text-status-warning"
-                      : "bg-muted text-muted-foreground";
-                  return (
-                    <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
-                      <Td>
-                        <a href={`/sku/${row.sku}`} className="font-mono text-xs text-primary hover:underline">
-                          {row.sku}
-                        </a>
-                      </Td>
-                      <Td className="max-w-[420px] truncate">
-                        {row.productName || <span className="text-muted-foreground">—</span>}
-                      </Td>
-                      <Td className="font-mono text-xs">
-                        {row.gtin || <span className="text-muted-foreground">—</span>}
-                      </Td>
-                      <Td className="font-mono text-xs">
-                        {row.upc || <span className="text-muted-foreground">—</span>}
-                      </Td>
-                      <Td>
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${fClass}`}>
-                          {f}
-                        </span>
-                      </Td>
-                      <Td>
-                        <span
-                          title={row.sds.reasons.length ? `Triggered by: ${row.sds.reasons.join(", ")}` : "No SDS keywords detected"}
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${sdsClass}`}
-                        >
-                          {row.sds.requirement}
-                        </span>
-                      </Td>
+        <Tabs defaultValue="identifiers" className="w-full">
+          <TabsList>
+            <TabsTrigger value="identifiers">Identifiers</TabsTrigger>
+            <TabsTrigger value="convert">Bulk Convert to WFS</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="identifiers" className="space-y-4">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="w-full sm:w-96">
+                <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
+              </div>
+              <Select value={conditionFilter} onValueChange={(v) => setConditionFilter(v)}>
+                <SelectTrigger className="w-full sm:w-64 bg-secondary border-border">
+                  <SelectValue placeholder="Item condition" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All conditions ({items.length.toLocaleString()})</SelectItem>
+                  {conditionCounts.map(([cond, n]) => (
+                    <SelectItem key={cond} value={cond}>
+                      {cond} ({n.toLocaleString()})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={fulfillmentFilter} onValueChange={(v) => setFulfillmentFilter(v)}>
+                <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
+                  <SelectValue placeholder="Fulfillment" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All fulfillment ({items.length.toLocaleString()})</SelectItem>
+                  {fulfillmentCounts.map(([f, n]) => (
+                    <SelectItem key={f} value={f}>
+                      {f} ({n.toLocaleString()})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={sdsFilter} onValueChange={(v) => setSdsFilter(v as SdsFilter)}>
+                <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
+                  <SelectValue placeholder="SDS requirement" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All SDS statuses ({items.length.toLocaleString()})</SelectItem>
+                  <SelectItem value="Likely required">
+                    Likely required ({(sdsCounts.get("Likely required") ?? 0).toLocaleString()})
+                  </SelectItem>
+                  <SelectItem value="Possibly required">
+                    Possibly required ({(sdsCounts.get("Possibly required") ?? 0).toLocaleString()})
+                  </SelectItem>
+                  <SelectItem value="Not required">
+                    Not required ({(sdsCounts.get("Not required") ?? 0).toLocaleString()})
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {visibleRows.length > 0 && (
+              <>
+                <DataTableShell>
+                  <Thead>
+                    <tr>
+                      <Th>SKU</Th>
+                      <Th>Product</Th>
+                      <Th>GTIN</Th>
+                      <Th>UPC</Th>
+                      <Th>Fulfillment</Th>
+                      <Th>SDS Required</Th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </DataTableShell>
-            {truncated && (
-              <p className="text-xs text-muted-foreground">
-                Showing first {RENDER_CAP.toLocaleString()} of {filtered.length.toLocaleString()} matching rows.
-                Narrow your search or use Export CSV for the full list.
-              </p>
+                  </Thead>
+                  <tbody className="divide-y">
+                    {visibleRows.map((row) => {
+                      const f = row.fulfillment || "Unknown";
+                      const fClass =
+                        f === "Walmart Fulfilled"
+                          ? "bg-primary/15 text-primary"
+                          : f === "Seller Fulfilled (WFS eligible)"
+                          ? "bg-status-warning/15 text-status-warning"
+                          : f === "Seller Fulfilled"
+                          ? "bg-muted text-muted-foreground"
+                          : "bg-muted text-muted-foreground";
+                      const sdsClass =
+                        row.sds.requirement === "Likely required"
+                          ? "bg-status-critical/15 text-status-critical"
+                          : row.sds.requirement === "Possibly required"
+                          ? "bg-status-warning/15 text-status-warning"
+                          : "bg-muted text-muted-foreground";
+                      return (
+                        <tr key={row.sku} className="hover:bg-muted/30 transition-colors">
+                          <Td>
+                            <a href={`/sku/${row.sku}`} className="font-mono text-xs text-primary hover:underline">
+                              {row.sku}
+                            </a>
+                          </Td>
+                          <Td className="max-w-[420px] truncate">
+                            {row.productName || <span className="text-muted-foreground">—</span>}
+                          </Td>
+                          <Td className="font-mono text-xs">
+                            {row.gtin || <span className="text-muted-foreground">—</span>}
+                          </Td>
+                          <Td className="font-mono text-xs">
+                            {row.upc || <span className="text-muted-foreground">—</span>}
+                          </Td>
+                          <Td>
+                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${fClass}`}>
+                              {f}
+                            </span>
+                          </Td>
+                          <Td>
+                            <span
+                              title={row.sds.reasons.length ? `Triggered by: ${row.sds.reasons.join(", ")}` : "No SDS keywords detected"}
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${sdsClass}`}
+                            >
+                              {row.sds.requirement}
+                            </span>
+                          </Td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </DataTableShell>
+                {truncated && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing first {RENDER_CAP.toLocaleString()} of {filtered.length.toLocaleString()} matching rows.
+                    Narrow your search or use Export CSV for the full list.
+                  </p>
+                )}
+              </>
             )}
-          </>
-        )}
+          </TabsContent>
+
+          <TabsContent value="convert">
+            <BulkConvertWfs items={items} />
+          </TabsContent>
+        </Tabs>
+
       </div>
     </DashboardLayout>
   );
