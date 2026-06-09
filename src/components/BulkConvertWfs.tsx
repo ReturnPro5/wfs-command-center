@@ -309,7 +309,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Convert {selected.size.toLocaleString()} SKUs to WFS?</AlertDialogTitle>
             <AlertDialogDescription>
-              This submits a Walmart <code>MP_WFS_ITEM</code> feed for the selected SKUs.
+              This submits a Walmart <code>WFS</code> convert feed for the selected SKUs.
               {selectedFlagged > 0 && (
                 <span className="mt-2 block rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-status-warning">
                   ⚠ {selectedFlagged} of the selected SKUs are flagged as needing SDS documentation.
