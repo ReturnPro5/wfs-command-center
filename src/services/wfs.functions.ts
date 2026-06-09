@@ -1664,3 +1664,186 @@ async function getCatalogPageInternal(
   };
 }
 
+
+// ─── Bulk WFS Conversion ────────────────────────────────
+// Submits selected SKUs to Walmart via the WFS item feed.
+// NOTE: Walmart's WFS feed typically requires additional attributes
+// (weight, dimensions, hazmat flag, country of origin). The catalog cache
+// only stores SKU + identifiers + product name, so first-pass submissions
+// will likely return per-SKU validation errors for missing fields — those
+// are surfaced verbatim back to the UI so you know what to fix.
+export interface WfsConversionRunResult {
+  runId: string;
+  feedId: string | null;
+  status: string;
+  submittedCount: number;
+  itemsReceived: number | null;
+  itemsSucceeded: number | null;
+  itemsFailed: number | null;
+  ingestionErrors: Array<{ sku?: string; type?: string; description?: string }>;
+}
+
+export const submitWfsConversion = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        skus: z
+          .array(z.string().min(1).max(50).regex(/^[\w.\-]+$/))
+          .min(1)
+          .max(500),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }): Promise<WfsConversionRunResult> => {
+    const feedType = process.env.WALMART_WFS_FEED_TYPE || "MP_WFS_ITEM";
+
+    const { data: rows, error: readErr } = await supabaseAdmin
+      .from("catalog_items")
+      .select("sku, product_name, gtin, upc")
+      .in("sku", data.skus);
+    if (readErr) throw new Error(`catalog lookup failed: ${readErr.message}`);
+
+    const bySku = new Map<string, any>();
+    for (const r of rows ?? []) bySku.set((r as any).sku, r);
+
+    if (bySku.size === 0) {
+      throw new Error("None of the selected SKUs were found in the cached catalog.");
+    }
+
+    const mpItems = data.skus
+      .map((sku) => bySku.get(sku))
+      .filter(Boolean)
+      .map((r: any) => {
+        const productIdentifiers: Array<{ productIdType: string; productId: string }> = [];
+        if (r.gtin) productIdentifiers.push({ productIdType: "GTIN", productId: r.gtin });
+        if (r.upc) productIdentifiers.push({ productIdType: "UPC", productId: r.upc });
+        return {
+          sku: r.sku,
+          productName: r.product_name || r.sku,
+          ...(productIdentifiers.length
+            ? { productIdentifiers: { productIdentifier: productIdentifiers } }
+            : {}),
+        };
+      });
+
+    const feedBody = {
+      MPItemFeedHeader: {
+        version: "1.0",
+        sellingChannel: "wfsenabled",
+        locale: "en",
+        Mart: "WALMART_US",
+        shippingProgram: "WFS",
+      },
+      MPItem: mpItems,
+    };
+
+    const { data: runRow, error: insErr } = await supabaseAdmin
+      .from("wfs_conversion_runs")
+      .insert({
+        sku_count: mpItems.length,
+        skus: mpItems.map((i) => i.sku),
+        status: "submitting",
+        response: {},
+      })
+      .select("id")
+      .single();
+    if (insErr) throw new Error(`conversion log insert failed: ${insErr.message}`);
+    const runId = (runRow as any).id as string;
+
+    try {
+      const submitRes = await walmartApi.submitFeed(feedType, feedBody);
+      const feedId: string | null =
+        submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
+
+      let statusPayload: any = null;
+      if (feedId) {
+        try {
+          statusPayload = await walmartApi.getFeedStatus(feedId, true);
+        } catch (e) {
+          console.warn(
+            "[WFS:convert] getFeedStatus failed",
+            e instanceof Error ? e.message : e
+          );
+        }
+      }
+
+      const itemsReceived = statusPayload?.itemsReceived ?? null;
+      const itemsSucceeded = statusPayload?.itemsSucceeded ?? null;
+      const itemsFailed = statusPayload?.itemsFailed ?? null;
+      const status =
+        statusPayload?.feedStatus ?? submitRes?.feedStatus ?? "submitted";
+
+      const errs: Array<{ sku?: string; type?: string; description?: string }> = [];
+      const itemDetails: any[] =
+        statusPayload?.itemDetails?.itemIngestionStatus ??
+        statusPayload?.itemDetails ??
+        [];
+      for (const d of Array.isArray(itemDetails) ? itemDetails : []) {
+        const ingErrs: any[] =
+          d?.ingestionErrors?.ingestionError ?? d?.ingestionErrors ?? [];
+        for (const e of Array.isArray(ingErrs) ? ingErrs : []) {
+          errs.push({
+            sku: d?.sku ?? d?.martSku,
+            type: e?.type ?? e?.errorType,
+            description:
+              e?.description ?? e?.errorDescription ?? e?.message,
+          });
+        }
+      }
+
+      await supabaseAdmin
+        .from("wfs_conversion_runs")
+        .update({
+          feed_id: feedId,
+          status,
+          response: { submit: submitRes, status: statusPayload },
+        })
+        .eq("id", runId);
+
+      return {
+        runId,
+        feedId,
+        status,
+        submittedCount: mpItems.length,
+        itemsReceived,
+        itemsSucceeded,
+        itemsFailed,
+        ingestionErrors: errs,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await supabaseAdmin
+        .from("wfs_conversion_runs")
+        .update({ status: "error", error: msg })
+        .eq("id", runId);
+      throw err;
+    }
+  });
+
+export interface WfsConversionRunSummary {
+  id: string;
+  feedId: string | null;
+  skuCount: number;
+  status: string;
+  error: string | null;
+  createdAt: string;
+}
+
+export const listWfsConversionRuns = createServerFn({ method: "GET" }).handler(
+  async (): Promise<WfsConversionRunSummary[]> => {
+    const { data, error } = await supabaseAdmin
+      .from("wfs_conversion_runs")
+      .select("id, feed_id, sku_count, status, error, created_at")
+      .order("created_at", { ascending: false })
+      .limit(25);
+    if (error) throw new Error(`conversion runs read failed: ${error.message}`);
+    return (data ?? []).map((r: any) => ({
+      id: r.id,
+      feedId: r.feed_id,
+      skuCount: r.sku_count,
+      status: r.status,
+      error: r.error,
+      createdAt: r.created_at,
+    }));
+  }
+);

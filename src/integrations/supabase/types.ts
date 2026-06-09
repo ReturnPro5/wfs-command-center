@@ -95,6 +95,39 @@ export type Database = {
         }
         Relationships: []
       }
+      wfs_conversion_runs: {
+        Row: {
+          created_at: string
+          error: string | null
+          feed_id: string | null
+          id: string
+          response: Json
+          sku_count: number
+          skus: Json
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          feed_id?: string | null
+          id?: string
+          response?: Json
+          sku_count?: number
+          skus?: Json
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          feed_id?: string | null
+          id?: string
+          response?: Json
+          sku_count?: number
+          skus?: Json
+          status?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
