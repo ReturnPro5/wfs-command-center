@@ -456,6 +456,12 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           No Open Box seller-fulfilled items found in the cached catalog. Sync the catalog first.
         </p>
       )}
+      {eligibleAll.length > 0 && filtered.length === 0 && readyOnly && (
+        <p className="text-sm text-muted-foreground">
+          No SKUs are fully enriched yet. Run <strong>Enrich pending</strong> above, or uncheck
+          “Ready to submit only” to see SKUs that still need more data.
+        </p>
+      )}
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
