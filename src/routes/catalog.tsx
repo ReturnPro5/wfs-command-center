@@ -3,6 +3,8 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { DataTableShell, Thead, Th, Td } from "@/components/DataTable";
 import { SearchFilter } from "@/components/SearchFilter";
 import { ErrorState, EmptyState } from "@/components/StateDisplays";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { BulkConvertWfs } from "@/components/BulkConvertWfs";
 import {
   getCachedCatalog,
   syncCatalogStep,
@@ -23,6 +25,7 @@ export const Route = createFileRoute("/catalog")({
     ],
   }),
 });
+
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
