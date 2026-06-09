@@ -38,7 +38,7 @@ const RENDER_CAP = 2000;
 function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "warn" | "bad" }) {
   const toneCls =
     tone === "ok"
-      ? "text-status-success"
+      ? "text-status-healthy"
       : tone === "warn"
       ? "text-status-warning"
       : tone === "bad"
