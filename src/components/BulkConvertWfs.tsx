@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+  enrichCatalogStep,
+  getEnrichmentOverview,
   submitWfsConversion,
   type CatalogIdentifier,
+  type EnrichmentOverview,
   type WfsConversionRunResult,
 } from "@/services/wfs.functions";
 import { classifySds, type SdsClassification, type SdsRequirement } from "@/lib/sdsClassifier";
@@ -31,6 +34,23 @@ type Row = CatalogIdentifier & { sds: SdsClassification };
 type SdsFilter = "ALL" | SdsRequirement;
 
 const RENDER_CAP = 2000;
+
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "warn" | "bad" }) {
+  const toneCls =
+    tone === "ok"
+      ? "text-status-healthy"
+      : tone === "warn"
+      ? "text-status-warning"
+      : tone === "bad"
+      ? "text-status-critical"
+      : "text-foreground";
+  return (
+    <div className="rounded border border-border bg-background/40 px-2 py-1.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={`font-mono text-sm ${toneCls}`}>{value.toLocaleString()}</div>
+    </div>
+  );
+}
 
 export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   // Only seller-fulfilled items (any kind) are eligible. Walmart-fulfilled
@@ -138,14 +158,130 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     }
   }
 
+  // ─── Catalog enrichment runner ────────────────────────
+  const [enrichOverview, setEnrichOverview] = useState<EnrichmentOverview | null>(null);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState<string>("");
+  const stopEnrichRef = useRef(false);
+
+  const refreshOverview = useCallback(async () => {
+    try {
+      const o = await getEnrichmentOverview();
+      setEnrichOverview(o);
+    } catch (e) {
+      console.warn("enrichment overview failed", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshOverview();
+  }, [refreshOverview]);
+
+  async function runEnrichment(reenrich: boolean) {
+    setEnriching(true);
+    stopEnrichRef.current = false;
+    let cursor: string | null = null;
+    let totalProcessed = 0;
+    let totalEnriched = 0;
+    let totalPartial = 0;
+    let totalFailed = 0;
+    try {
+      while (!stopEnrichRef.current) {
+        const res = await enrichCatalogStep({
+          data: { batchSize: 25, afterSku: cursor ?? undefined, reenrich },
+        });
+        totalProcessed += res.processed;
+        totalEnriched += res.enriched;
+        totalPartial += res.partial;
+        totalFailed += res.failed;
+        cursor = res.nextAfterSku;
+        setEnrichProgress(
+          `Processed ${totalProcessed} · enriched ${totalEnriched} · partial ${totalPartial} · errors ${totalFailed} · remaining ${res.remaining}`
+        );
+        if (res.done || res.processed === 0) break;
+      }
+      toast.success(
+        `Enrichment complete — enriched ${totalEnriched}, partial ${totalPartial}, errors ${totalFailed}`
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Enrichment failed: ${msg}`);
+    } finally {
+      setEnriching(false);
+      stopEnrichRef.current = false;
+      void refreshOverview();
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
         Submits selected SKUs to Walmart via the <code className="text-foreground">WFS</code> convert feed.
         Walmart usually requires extra attributes (weight, dimensions, hazmat flag, country of origin) for full WFS
-        conversion — first-pass submissions may return per-SKU validation errors listing those missing fields.
-        Errors are shown below so you know exactly what to fix.
+        conversion. Run <strong>Enrich catalog</strong> first to pull these fields from Walmart's items API — any SKU
+        still marked <em>partial</em> is missing required data that the items API doesn't expose and must be filled in
+        Seller Center.
       </div>
+
+      {/* Enrichment panel */}
+      <section className="rounded-md border border-border bg-secondary/20 p-3 space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold">Catalog enrichment</h3>
+            <p className="text-xs text-muted-foreground">
+              Pulls brand, image, price, sub-category, country of origin, and shipping dims from
+              <code className="mx-1">/v3/items/&#123;sku&#125;</code> into the catalog cache.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => runEnrichment(false)}
+              disabled={enriching}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {enriching ? "Enriching…" : "Enrich pending"}
+            </button>
+            <button
+              onClick={() => runEnrichment(true)}
+              disabled={enriching}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
+            >
+              Re-enrich all
+            </button>
+            {enriching && (
+              <button
+                onClick={() => {
+                  stopEnrichRef.current = true;
+                }}
+                className="rounded-md border border-status-warning/40 px-3 py-1.5 text-xs font-medium text-status-warning hover:bg-status-warning/10"
+              >
+                Stop
+              </button>
+            )}
+          </div>
+        </div>
+        {enrichOverview && (
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+            <Stat label="Total" value={enrichOverview.counts.total} />
+            <Stat label="Enriched" value={enrichOverview.counts.enriched} tone="ok" />
+            <Stat label="Partial" value={enrichOverview.counts.partial} tone="warn" />
+            <Stat label="Pending" value={enrichOverview.counts.pending} />
+            <Stat label="Errors" value={enrichOverview.counts.errored} tone="bad" />
+          </div>
+        )}
+        {enrichProgress && (
+          <p className="text-xs text-muted-foreground">{enrichProgress}</p>
+        )}
+        {enrichOverview?.state.lastRunAt && (
+          <p className="text-[11px] text-muted-foreground">
+            Last run: {new Date(enrichOverview.state.lastRunAt).toLocaleString()}
+            {enrichOverview.state.lastFullRunAt
+              ? ` · last full pass: ${new Date(enrichOverview.state.lastFullRunAt).toLocaleString()}`
+              : ""}
+          </p>
+        )}
+      </section>
+
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="w-full sm:w-96">
