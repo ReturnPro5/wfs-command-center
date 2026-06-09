@@ -141,7 +141,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
-        Submits selected SKUs to Walmart via the <code className="text-foreground">MP_WFS_ITEM</code> feed.
+        Submits selected SKUs to Walmart via the <code className="text-foreground">WFS</code> convert feed.
         Walmart usually requires extra attributes (weight, dimensions, hazmat flag, country of origin) for full WFS
         conversion — first-pass submissions may return per-SKU validation errors listing those missing fields.
         Errors are shown below so you know exactly what to fix.
