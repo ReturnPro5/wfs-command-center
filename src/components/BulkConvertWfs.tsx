@@ -35,6 +35,23 @@ type SdsFilter = "ALL" | SdsRequirement;
 
 const RENDER_CAP = 2000;
 
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "warn" | "bad" }) {
+  const toneCls =
+    tone === "ok"
+      ? "text-status-success"
+      : tone === "warn"
+      ? "text-status-warning"
+      : tone === "bad"
+      ? "text-status-critical"
+      : "text-foreground";
+  return (
+    <div className="rounded border border-border bg-background/40 px-2 py-1.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={`font-mono text-sm ${toneCls}`}>{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
 export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   // Only seller-fulfilled items (any kind) are eligible. Walmart-fulfilled
   // and Unknown items are excluded from this tab entirely.
