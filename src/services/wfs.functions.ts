@@ -1681,7 +1681,6 @@ export interface WfsConversionRunResult {
   itemsSucceeded: number | null;
   itemsFailed: number | null;
   ingestionErrors: Array<{ sku?: string; type?: string; description?: string }>;
-  rawResponse: Record<string, unknown>;
 }
 
 export const submitWfsConversion = createServerFn({ method: "POST" })
@@ -1810,7 +1809,6 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         itemsSucceeded,
         itemsFailed,
         ingestionErrors: errs,
-        rawResponse: { submit: submitRes, status: statusPayload },
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
