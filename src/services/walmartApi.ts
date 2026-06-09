@@ -179,7 +179,7 @@ export async function getItem(sku: string) {
 }
 
 // ─── Feeds (WFS Conversion) ─────────────────────────────
-// Submit a multipart/form-data feed file. Used for MP_WFS_ITEM (convert items to WFS).
+// Submit a multipart/form-data feed file. Used for feedType=WFS (convert Seller-Fulfilled items to WFS).
 // The feed body is a JSON document; Walmart expects it as the multipart "file" part.
 export async function submitFeed(feedType: string, feedBody: unknown): Promise<any> {
   const token = await getWalmartAccessToken();
