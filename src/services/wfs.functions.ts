@@ -1681,7 +1681,7 @@ export interface WfsConversionRunResult {
   itemsSucceeded: number | null;
   itemsFailed: number | null;
   ingestionErrors: Array<{ sku?: string; type?: string; description?: string }>;
-  rawResponse: unknown;
+  rawResponse: Record<string, unknown>;
 }
 
 export const submitWfsConversion = createServerFn({ method: "POST" })
