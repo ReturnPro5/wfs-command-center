@@ -316,6 +316,15 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
             </SelectItem>
           </SelectContent>
         </Select>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
+          <input
+            type="checkbox"
+            checked={readyOnly}
+            onChange={(e) => setReadyOnly(e.target.checked)}
+            className="h-4 w-4 cursor-pointer accent-primary"
+          />
+          Ready to submit only ({readyCount.toLocaleString()})
+        </label>
         <div className="flex-1" />
         <div className="text-sm text-muted-foreground">
           {selected.size.toLocaleString()} selected
