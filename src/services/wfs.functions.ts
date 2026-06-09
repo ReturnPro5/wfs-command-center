@@ -1698,7 +1698,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     // Walmart's "Convert Seller-Fulfilled item to WFS" uses feedType=WFS
     // (the WFS Item Spec). MP_WFS_ITEM is for new WFS item setup, which is
     // a different flow. Override via WALMART_WFS_FEED_TYPE if needed.
-    const feedType = process.env.WALMART_WFS_FEED_TYPE || "WFS";
+    // Walmart's "Convert Seller-Fulfilled item to WFS" uses feedType=OMNI_WFS
+    // with the SupplierItem schema. Override via WALMART_WFS_FEED_TYPE if needed.
+    const feedType = process.env.WALMART_WFS_FEED_TYPE || "OMNI_WFS";
 
     const { data: rows, error: readErr } = await supabaseAdmin
       .from("catalog_items")
@@ -1713,31 +1715,26 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       throw new Error("None of the selected SKUs were found in the cached catalog.");
     }
 
-    const mpItems = data.skus
+    const supplierItems = data.skus
       .map((sku) => bySku.get(sku))
       .filter(Boolean)
-      .map((r: any) => {
-        const productIdentifiers: Array<{ productIdType: string; productId: string }> = [];
-        if (r.gtin) productIdentifiers.push({ productIdType: "GTIN", productId: r.gtin });
-        if (r.upc) productIdentifiers.push({ productIdType: "UPC", productId: r.upc });
-        return {
+      .map((r: any) => ({
+        TradeItem: {
           sku: r.sku,
-          productName: r.product_name || r.sku,
-          ...(productIdentifiers.length
-            ? { productIdentifiers: { productIdentifier: productIdentifiers } }
-            : {}),
-        };
-      });
+          orderableGTIN: r.gtin || r.upc || r.sku,
+        },
+      }));
 
     const feedBody = {
-      MPItemFeedHeader: {
-        version: "1.0",
-        sellingChannel: "wfsenabled",
+      SupplierItemFeedHeader: {
+        version: "1.4",
+        sellingChannel: "fbw",
+        processMode: "REPLACE",
+        subset: "EXTERNAL",
         locale: "en",
-        Mart: "WALMART_US",
-        shippingProgram: "WFS",
+        subCategory: "",
       },
-      MPItem: mpItems,
+      SupplierItem: supplierItems,
     };
 
     const { data: runRow, error: insErr } = await supabaseAdmin
