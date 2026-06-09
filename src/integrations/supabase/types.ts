@@ -14,44 +14,143 @@ export type Database = {
   }
   public: {
     Tables: {
+      catalog_enrichment_state: {
+        Row: {
+          cursor: string | null
+          enriched_this_run: number
+          error: string | null
+          failed_this_run: number
+          id: number
+          last_full_run_at: string | null
+          last_run_at: string | null
+          partial_this_run: number
+          processed_this_run: number
+          status: string
+        }
+        Insert: {
+          cursor?: string | null
+          enriched_this_run?: number
+          error?: string | null
+          failed_this_run?: number
+          id?: number
+          last_full_run_at?: string | null
+          last_run_at?: string | null
+          partial_this_run?: number
+          processed_this_run?: number
+          status?: string
+        }
+        Update: {
+          cursor?: string | null
+          enriched_this_run?: number
+          error?: string | null
+          failed_this_run?: number
+          id?: number
+          last_full_run_at?: string | null
+          last_run_at?: string | null
+          partial_this_run?: number
+          processed_this_run?: number
+          status?: string
+        }
+        Relationships: []
+      }
       catalog_items: {
         Row: {
+          brand: string
+          category: string
           condition: string
+          country_of_origin: string
+          currency: string
+          enriched_at: string | null
+          enrichment_error: string | null
+          enrichment_raw: Json | null
+          enrichment_status: string
           first_seen_at: string
           fulfillment: string
           gtin: string
           last_seen_at: string
           last_synced_at: string
           lifecycle: string
+          main_image_url: string
+          manufacturer: string
+          price: number | null
           product_name: string
+          product_type: string
           published_status: string
+          shipping_dim_unit: string
+          shipping_height: number | null
+          shipping_length: number | null
+          shipping_weight: number | null
+          shipping_weight_unit: string
+          shipping_width: number | null
+          short_description: string
           sku: string
+          sub_category: string
           upc: string
         }
         Insert: {
+          brand?: string
+          category?: string
           condition?: string
+          country_of_origin?: string
+          currency?: string
+          enriched_at?: string | null
+          enrichment_error?: string | null
+          enrichment_raw?: Json | null
+          enrichment_status?: string
           first_seen_at?: string
           fulfillment?: string
           gtin?: string
           last_seen_at?: string
           last_synced_at?: string
           lifecycle?: string
+          main_image_url?: string
+          manufacturer?: string
+          price?: number | null
           product_name?: string
+          product_type?: string
           published_status?: string
+          shipping_dim_unit?: string
+          shipping_height?: number | null
+          shipping_length?: number | null
+          shipping_weight?: number | null
+          shipping_weight_unit?: string
+          shipping_width?: number | null
+          short_description?: string
           sku: string
+          sub_category?: string
           upc?: string
         }
         Update: {
+          brand?: string
+          category?: string
           condition?: string
+          country_of_origin?: string
+          currency?: string
+          enriched_at?: string | null
+          enrichment_error?: string | null
+          enrichment_raw?: Json | null
+          enrichment_status?: string
           first_seen_at?: string
           fulfillment?: string
           gtin?: string
           last_seen_at?: string
           last_synced_at?: string
           lifecycle?: string
+          main_image_url?: string
+          manufacturer?: string
+          price?: number | null
           product_name?: string
+          product_type?: string
           published_status?: string
+          shipping_dim_unit?: string
+          shipping_height?: number | null
+          shipping_length?: number | null
+          shipping_weight?: number | null
+          shipping_weight_unit?: string
+          shipping_width?: number | null
+          short_description?: string
           sku?: string
+          sub_category?: string
           upc?: string
         }
         Relationships: []
