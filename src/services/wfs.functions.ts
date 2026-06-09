@@ -1118,7 +1118,10 @@ export interface CatalogIdentifier {
   condition?: string;
   publishedStatus?: string;
   fulfillment?: FulfillmentType | string;
+  enrichmentStatus?: "pending" | "partial" | "enriched" | "error" | string;
+  enrichedAt?: string | null;
 }
+
 
 // Derive fulfillment label from Walmart data.
 // Priority order:
