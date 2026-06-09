@@ -1709,7 +1709,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
 
     const { data: rows, error: readErr } = await supabaseAdmin
       .from("catalog_items")
-      .select("sku, product_name, gtin, upc")
+      .select(
+        "sku, product_name, gtin, upc, brand, manufacturer, short_description, main_image_url, price, currency, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit, enrichment_status"
+      )
       .in("sku", data.skus);
     if (readErr) throw new Error(`catalog lookup failed: ${readErr.message}`);
 
@@ -1723,12 +1725,59 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     const supplierItems = data.skus
       .map((sku) => bySku.get(sku))
       .filter(Boolean)
-      .map((r: any) => ({
-        TradeItem: {
-          sku: r.sku,
-          orderableGTIN: r.gtin || r.upc || r.sku,
-        },
-      }));
+      .map((r: any) => {
+        const orderableId = r.gtin || r.upc || r.sku;
+        return {
+          Orderable: {
+            sku: r.sku,
+            productIdentifiers: {
+              productIdentifier: [
+                { productIdType: r.gtin ? "GTIN" : "UPC", productId: orderableId },
+              ],
+            },
+            productName: r.product_name || r.sku,
+            brand: r.brand || "",
+            manufacturer: r.manufacturer || r.brand || "",
+            mainImageUrl: r.main_image_url || "",
+            shortDescription: r.short_description || r.product_name || "",
+            countryOfOriginAssembly: r.country_of_origin
+              ? [r.country_of_origin]
+              : [],
+            price: r.price ?? 0,
+            currency: r.currency || "USD",
+            ShippingWeight: r.shipping_weight ?? 0,
+            shippingWeightUnit: r.shipping_weight_unit || "lb",
+          },
+          Visible: {
+            subCategory: r.sub_category || "",
+          },
+          TradeItem: {
+            sku: r.sku,
+            orderableGTIN: orderableId,
+            countryOfOriginAssembly: r.country_of_origin
+              ? [r.country_of_origin]
+              : [],
+            innerPack: {
+              innerPackWidth: r.shipping_width ?? 0,
+              innerPackHeight: r.shipping_height ?? 0,
+              innerPackDepth: r.shipping_length ?? 0,
+              innerPackWeight: r.shipping_weight ?? 0,
+              qtySellableItemsInnerPack: 1,
+              innerPackGTIN: orderableId,
+            },
+          },
+        };
+      });
+
+    // Use the most common subCategory as the feed-header default. Walmart
+    // expects this at the header level; per-item Visible.subCategory can override.
+    const subCatCounts = new Map<string, number>();
+    for (const r of bySku.values()) {
+      const k = (r as any).sub_category || "";
+      if (k) subCatCounts.set(k, (subCatCounts.get(k) ?? 0) + 1);
+    }
+    const headerSubCategory =
+      [...subCatCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "other_other";
 
     const feedBody = {
       SupplierItemFeedHeader: {
@@ -1737,7 +1786,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         processMode: "REPLACE",
         subset: "EXTERNAL",
         locale: "en",
-        subCategory: "",
+        subCategory: headerSubCategory,
       },
       SupplierItem: supplierItems,
     };
