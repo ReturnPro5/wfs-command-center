@@ -1740,8 +1740,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     const { data: runRow, error: insErr } = await supabaseAdmin
       .from("wfs_conversion_runs")
       .insert({
-        sku_count: mpItems.length,
-        skus: mpItems.map((i) => i.sku),
+        sku_count: supplierItems.length,
+        skus: supplierItems.map((i) => i.sku),
         status: "submitting",
         response: {},
       })
@@ -1804,7 +1804,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         runId,
         feedId,
         status,
-        submittedCount: mpItems.length,
+        submittedCount: supplierItems.length,
         itemsReceived,
         itemsSucceeded,
         itemsFailed,
