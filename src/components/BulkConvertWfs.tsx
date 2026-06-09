@@ -68,6 +68,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
 
   const [search, setSearch] = useState("");
   const [sdsFilter, setSdsFilter] = useState<SdsFilter>("Not required");
+  const [readyOnly, setReadyOnly] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -77,6 +78,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return eligibleAll.filter((r) => {
+      if (readyOnly && r.enrichmentStatus !== "enriched") return false;
       if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
       if (!q) return true;
       return (
@@ -86,7 +88,13 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [eligibleAll, search, sdsFilter]);
+  }, [eligibleAll, search, sdsFilter, readyOnly]);
+
+  const readyCount = useMemo(
+    () => eligibleAll.filter((r) => r.enrichmentStatus === "enriched").length,
+    [eligibleAll]
+  );
+
 
   const sdsCounts = useMemo(() => {
     const c = new Map<SdsRequirement, number>([
@@ -308,6 +316,15 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
             </SelectItem>
           </SelectContent>
         </Select>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
+          <input
+            type="checkbox"
+            checked={readyOnly}
+            onChange={(e) => setReadyOnly(e.target.checked)}
+            className="h-4 w-4 cursor-pointer accent-primary"
+          />
+          Ready to submit only ({readyCount.toLocaleString()})
+        </label>
         <div className="flex-1" />
         <div className="text-sm text-muted-foreground">
           {selected.size.toLocaleString()} selected
@@ -437,6 +454,12 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       {eligibleAll.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No Open Box seller-fulfilled items found in the cached catalog. Sync the catalog first.
+        </p>
+      )}
+      {eligibleAll.length > 0 && filtered.length === 0 && readyOnly && (
+        <p className="text-sm text-muted-foreground">
+          No SKUs are fully enriched yet. Run <strong>Enrich pending</strong> above, or uncheck
+          “Ready to submit only” to see SKUs that still need more data.
         </p>
       )}
 
