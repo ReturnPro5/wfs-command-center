@@ -68,6 +68,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
 
   const [search, setSearch] = useState("");
   const [sdsFilter, setSdsFilter] = useState<SdsFilter>("Not required");
+  const [readyOnly, setReadyOnly] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -77,6 +78,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return eligibleAll.filter((r) => {
+      if (readyOnly && r.enrichmentStatus !== "enriched") return false;
       if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
       if (!q) return true;
       return (
@@ -86,7 +88,13 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [eligibleAll, search, sdsFilter]);
+  }, [eligibleAll, search, sdsFilter, readyOnly]);
+
+  const readyCount = useMemo(
+    () => eligibleAll.filter((r) => r.enrichmentStatus === "enriched").length,
+    [eligibleAll]
+  );
+
 
   const sdsCounts = useMemo(() => {
     const c = new Map<SdsRequirement, number>([
