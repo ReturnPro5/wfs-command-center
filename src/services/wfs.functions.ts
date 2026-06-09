@@ -1741,7 +1741,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       .from("wfs_conversion_runs")
       .insert({
         sku_count: supplierItems.length,
-        skus: supplierItems.map((i) => i.sku),
+        skus: supplierItems.map((i) => i.TradeItem.sku),
         status: "submitting",
         response: {},
       })
