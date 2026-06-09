@@ -39,7 +39,9 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     return items
       .filter((r) => {
         const f = r.fulfillment ?? "Unknown";
-        return f === "Seller Fulfilled" || f === "Seller Fulfilled (WFS eligible)";
+        if (f !== "Seller Fulfilled" && f !== "Seller Fulfilled (WFS eligible)") return false;
+        const cond = (r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
+        return cond === "openbox";
       })
       .map((r) => ({ ...r, sds: classifySds(r.productName) }));
   }, [items]);
