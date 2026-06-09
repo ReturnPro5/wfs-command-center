@@ -179,16 +179,12 @@ export async function getItem(sku: string) {
 }
 
 // ─── Feeds (WFS Conversion) ─────────────────────────────
-// Submit a multipart/form-data feed file. Used for feedType=WFS (convert Seller-Fulfilled items to WFS).
-// The feed body is a JSON document; Walmart expects it as the multipart "file" part.
+// Submit a feed. Used for feedType=OMNI_WFS (convert Seller-Fulfilled items to WFS).
+// Walmart's WFS convert endpoint takes a JSON body directly (NOT multipart).
 export async function submitFeed(feedType: string, feedBody: unknown): Promise<any> {
   const token = await getWalmartAccessToken();
   const baseUrl = getBaseUrl();
   const channelType = process.env.WALMART_CHANNEL_TYPE;
-
-  const json = JSON.stringify(feedBody);
-  const form = new FormData();
-  form.append("file", new Blob([json], { type: "application/json" }), "feed.json");
 
   const response = await fetch(`${baseUrl}/v3/feeds?feedType=${encodeURIComponent(feedType)}`, {
     method: "POST",
@@ -199,8 +195,9 @@ export async function submitFeed(feedType: string, feedBody: unknown): Promise<a
       "WM_SVC.NAME": "Walmart Marketplace",
       "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
       "Accept": "application/json",
+      "Content-Type": "application/json",
     },
-    body: form,
+    body: JSON.stringify(feedBody),
   });
 
   const text = await response.text();
