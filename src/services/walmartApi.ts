@@ -177,3 +177,49 @@ export async function getItems(nextCursor?: string, lifecycleStatus?: string, pu
 export async function getItem(sku: string) {
   return walmartFetch<any>(`/v3/items/${encodeURIComponent(sku)}`);
 }
+
+// ─── Feeds (WFS Conversion) ─────────────────────────────
+// Submit a multipart/form-data feed file. Used for MP_WFS_ITEM (convert items to WFS).
+// The feed body is a JSON document; Walmart expects it as the multipart "file" part.
+export async function submitFeed(feedType: string, feedBody: unknown): Promise<any> {
+  const token = await getWalmartAccessToken();
+  const baseUrl = getBaseUrl();
+  const channelType = process.env.WALMART_CHANNEL_TYPE;
+
+  const json = JSON.stringify(feedBody);
+  const form = new FormData();
+  form.append("file", new Blob([json], { type: "application/json" }), "feed.json");
+
+  const response = await fetch(`${baseUrl}/v3/feeds?feedType=${encodeURIComponent(feedType)}`, {
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      "WM_SEC.ACCESS_TOKEN": token,
+      ...(channelType ? { "WM_CONSUMER.CHANNEL.TYPE": channelType } : {}),
+      "WM_SVC.NAME": "Walmart Marketplace",
+      "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
+      "Accept": "application/json",
+    },
+    body: form,
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Walmart feed submit [${response.status}] ${feedType}: ${text}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+export async function getFeedStatus(feedId: string, includeDetails = true): Promise<any> {
+  const params = new URLSearchParams({
+    feedId,
+    includeDetails: String(includeDetails),
+    limit: "1000",
+  });
+  return walmartFetch<any>(`/v3/feeds/${encodeURIComponent(feedId)}?${params}`);
+}
+
