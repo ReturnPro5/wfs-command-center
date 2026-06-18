@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { DataTableShell, Thead, Th, Td } from "@/components/DataTable";
 import { SearchFilter } from "@/components/SearchFilter";
+import { CategoryFilter } from "@/components/CategoryFilter";
 import { ErrorState, EmptyState } from "@/components/StateDisplays";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BulkConvertWfs } from "@/components/BulkConvertWfs";
@@ -97,6 +98,7 @@ function CatalogPage() {
   const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
   const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("ALL");
   const [sdsFilter, setSdsFilter] = useState<SdsFilter>("ALL");
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{ lifecycle: string; publishedStatus: string } | null>(null);
 
@@ -219,6 +221,10 @@ function CatalogPage() {
       if (conditionFilter !== "ALL" && (r.condition ?? "") !== conditionFilter) return false;
       if (fulfillmentFilter !== "ALL" && (r.fulfillment ?? "Unknown") !== fulfillmentFilter) return false;
       if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
+      if (selectedCategories.length > 0) {
+        const cat = (r.category ?? "").trim() || "Uncategorized";
+        if (!selectedCategories.includes(cat)) return false;
+      }
       if (!q) return true;
       return (
         r.sku.toLowerCase().includes(q) ||
@@ -227,12 +233,21 @@ function CatalogPage() {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [itemsWithSds, search, conditionFilter, fulfillmentFilter, sdsFilter]);
+  }, [itemsWithSds, search, conditionFilter, fulfillmentFilter, sdsFilter, selectedCategories]);
 
   const conditionCounts = useMemo(() => {
     const c = new Map<string, number>();
     for (const r of items) {
       const k = r.condition?.trim() || "Unknown";
+      c.set(k, (c.get(k) ?? 0) + 1);
+    }
+    return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
+  }, [items]);
+
+  const categoryCounts = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const r of items) {
+      const k = r.category?.trim() || "Uncategorized";
       c.set(k, (c.get(k) ?? 0) + 1);
     }
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
@@ -426,6 +441,14 @@ function CatalogPage() {
                   </SelectItem>
                 </SelectContent>
               </Select>
+              <div className="w-full sm:w-72">
+                <CategoryFilter
+                  options={categoryCounts.map(([label, count]) => ({ label, count }))}
+                  selected={selectedCategories}
+                  onChange={setSelectedCategories}
+                  placeholder="All categories"
+                />
+              </div>
             </div>
 
             {visibleRows.length > 0 && (

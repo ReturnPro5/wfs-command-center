@@ -1118,6 +1118,7 @@ export interface CatalogIdentifier {
   condition?: string;
   publishedStatus?: string;
   fulfillment?: FulfillmentType | string;
+  category?: string;
   enrichmentStatus?: "pending" | "partial" | "enriched" | "error" | string;
   enrichedAt?: string | null;
 }
@@ -1291,7 +1292,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, enrichment_status, enriched_at")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, enrichment_status, enriched_at")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
@@ -1306,6 +1307,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           condition: r.condition ?? "",
           publishedStatus: r.published_status ?? "",
           fulfillment: r.fulfillment ?? "Unknown",
+          category: r.category ?? "",
           enrichmentStatus: r.enrichment_status ?? "pending",
           enrichedAt: r.enriched_at ?? null,
         });
@@ -1412,6 +1414,7 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
         condition: it.condition ?? "New",
         published_status: it.publishedStatus ?? publishedStatus,
         fulfillment: it.fulfillment ?? "Unknown",
+        category: it.category ?? "",
         last_seen_at: now,
         last_synced_at: now,
       }));
@@ -1635,6 +1638,7 @@ async function getCatalogPageInternal(
       condition: String(it.condition ?? it.itemCondition ?? "New"),
       publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
       fulfillment: deriveFulfillment(it, wfsSkuSet),
+      category: String(it.category ?? it.productType ?? it.primaryCategory ?? ""),
     }))
     .filter((i) => i.sku);
   const totalCount: number | null =
