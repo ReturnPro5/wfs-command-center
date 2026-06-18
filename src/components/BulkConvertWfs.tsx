@@ -10,6 +10,7 @@ import {
 } from "@/services/wfs.functions";
 import { classifySds, type SdsClassification, type SdsRequirement } from "@/lib/sdsClassifier";
 import { SearchFilter } from "@/components/SearchFilter";
+import { CategoryFilter } from "@/components/CategoryFilter";
 import { DataTableShell, Thead, Th, Td } from "@/components/DataTable";
 import {
   Select,
@@ -69,6 +70,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   const [search, setSearch] = useState("");
   const [sdsFilter, setSdsFilter] = useState<SdsFilter>("Not required");
   const [readyOnly, setReadyOnly] = useState(true);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -80,6 +82,10 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     return eligibleAll.filter((r) => {
       if (readyOnly && r.enrichmentStatus !== "enriched") return false;
       if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
+      if (selectedCategories.length > 0) {
+        const cat = (r.category ?? "").trim() || "Uncategorized";
+        if (!selectedCategories.includes(cat)) return false;
+      }
       if (!q) return true;
       return (
         r.sku.toLowerCase().includes(q) ||
@@ -88,7 +94,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [eligibleAll, search, sdsFilter, readyOnly]);
+  }, [eligibleAll, search, sdsFilter, readyOnly, selectedCategories]);
 
   const readyCount = useMemo(
     () => eligibleAll.filter((r) => r.enrichmentStatus === "enriched").length,
@@ -104,6 +110,15 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     ]);
     for (const r of eligibleAll) c.set(r.sds.requirement, (c.get(r.sds.requirement) ?? 0) + 1);
     return c;
+  }, [eligibleAll]);
+
+  const categoryCounts = useMemo(() => {
+    const c = new Map<string, number>();
+    for (const r of eligibleAll) {
+      const k = r.category?.trim() || "Uncategorized";
+      c.set(k, (c.get(k) ?? 0) + 1);
+    }
+    return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [eligibleAll]);
 
   const visible = filtered.slice(0, RENDER_CAP);
@@ -325,6 +340,14 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           />
           Ready to submit only ({readyCount.toLocaleString()})
         </label>
+        <div className="w-full sm:w-72">
+          <CategoryFilter
+            options={categoryCounts.map(([label, count]) => ({ label, count }))}
+            selected={selectedCategories}
+            onChange={setSelectedCategories}
+            placeholder="All categories"
+          />
+        </div>
         <div className="flex-1" />
         <div className="text-sm text-muted-foreground">
           {selected.size.toLocaleString()} selected
