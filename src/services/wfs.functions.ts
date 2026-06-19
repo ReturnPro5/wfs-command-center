@@ -1231,6 +1231,30 @@ function parseCsv(text: string, delimiter = ","): string[][] {
   return rows;
 }
 
+function parseCsvLine(line: string, delimiter: string): string[] {
+  const cells: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') quoted = false;
+      else cell += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === delimiter) {
+      cells.push(cell);
+      cell = "";
+    } else cell += ch;
+  }
+  cells.push(cell);
+  return cells;
+}
+
 function detectDelimiter(text: string): string {
   const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
   const tabs = (firstLine.match(/\t/g) ?? []).length;
@@ -1260,6 +1284,83 @@ function parseFulfillmentReport(csv: string): Map<string, FulfillmentType> {
     if (sku && fulfillment) map.set(sku, fulfillment);
   }
   return map;
+}
+
+function createFulfillmentReportParser() {
+  const map = new Map<string, FulfillmentType>();
+  let buffer = "";
+  let delimiter = ",";
+  let skuIdx = -1;
+  let fulfillmentIdx = -1;
+  let headerParsed = false;
+
+  function ingestLine(rawLine: string) {
+    const line = rawLine.replace(/\r$/, "").replace(/^\uFEFF/, "");
+    if (!line) return;
+    if (!headerParsed) {
+      delimiter = detectDelimiter(line);
+      const header = parseCsvLine(line, delimiter).map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ""));
+      skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku" || h === "merchantsku");
+      fulfillmentIdx = header.findIndex(
+        (h) => h === "fulfillmenttype" || h === "fulfillment" || h === "wfsstatus" || h === "wfseligibility" || h === "shippingprogramtype",
+      );
+      headerParsed = true;
+      if (skuIdx < 0 || fulfillmentIdx < 0) {
+        console.warn(`[WFS:catalog] item report header missing sku/fulfillment columns. header=${header.slice(0, 30).join("|")}`);
+      }
+      return;
+    }
+    if (skuIdx < 0 || fulfillmentIdx < 0) return;
+    const row = parseCsvLine(line, delimiter);
+    const sku = row[skuIdx]?.trim();
+    const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
+    if (sku && fulfillment) map.set(sku, fulfillment);
+  }
+
+  return {
+    push(text: string, final = false) {
+      buffer += text;
+      const lines = buffer.split("\n");
+      buffer = final ? "" : lines.pop() ?? "";
+      for (const line of lines) ingestLine(line);
+      if (final && buffer) ingestLine(buffer);
+    },
+    map,
+  };
+}
+
+async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string): Promise<Map<string, FulfillmentType>> {
+  const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+  if (!isZip) {
+    return parseFulfillmentReport(new TextDecoder().decode(bytes));
+  }
+
+  const { Unzip, UnzipInflate, DecodeUTF8 } = await import("fflate");
+  const parser = createFulfillmentReportParser();
+  const unzipper = new Unzip();
+  unzipper.register(UnzipInflate);
+  let selected = false;
+  let streamError: Error | null = null;
+
+  unzipper.onfile = (file) => {
+    if (selected) return;
+    if (!/\.(csv|tsv|txt)$/i.test(file.name) && file.name) return;
+    selected = true;
+    const decoder = new DecodeUTF8((text, final) => parser.push(text, final));
+    file.ondata = (err, data, final) => {
+      if (err) {
+        streamError = err;
+        return;
+      }
+      decoder.push(data, final);
+    };
+    file.start();
+  };
+
+  unzipper.push(bytes, true);
+  if (streamError) throw streamError;
+  if (!selected) throw new Error(`report zip did not contain a text file (${contentType || "unknown content type"})`);
+  return parser.map;
 }
 
 
