@@ -1134,17 +1134,36 @@ function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
   const ship = String(
     it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
   ).toUpperCase();
-  const wfsEnabledRaw = it?.wfsEnabled ?? it?.wfs_enabled ?? it?.isWfsEnabled;
-  const wfsEnabled =
-    wfsEnabledRaw === true ||
-    String(wfsEnabledRaw).toLowerCase() === "true" ||
-    String(wfsEnabledRaw).toLowerCase() === "yes";
+
+  // Walmart returns WFS-eligibility under a half-dozen different field names
+  // depending on endpoint version. Check them all.
+  const eligibilityCandidates = [
+    it?.wfsEnabled,
+    it?.wfs_enabled,
+    it?.isWfsEnabled,
+    it?.wfsEligible,
+    it?.wfs_eligible,
+    it?.isWfsEligible,
+    it?.eligibleForWfs,
+    it?.wfsEligibility,
+    it?.wfsStatus,
+    it?.wfs?.eligible,
+    it?.wfs?.status,
+    it?.fulfillmentEligibility?.wfs,
+    it?.additionalAttributes?.wfsEligible,
+    it?.additionalAttributes?.wfsEnabled,
+  ];
+  const isTruthy = (v: unknown) =>
+    v === true ||
+    ["true", "yes", "y", "eligible", "enabled", "active"].includes(String(v).toLowerCase());
+  const wfsEligible = eligibilityCandidates.some(isTruthy);
+  const wfsEligibilityProvided = eligibilityCandidates.some((v) => v !== undefined && v !== null && v !== "");
 
   if (sku && wfsSkuSet?.has(sku)) return "Walmart Fulfilled";
   if (ship.includes("WFS")) return "Walmart Fulfilled";
-  if (wfsEnabled) return "Seller Fulfilled (WFS eligible)";
+  if (wfsEligible) return "Seller Fulfilled (WFS eligible)";
   if (sku && wfsSkuSet && !wfsSkuSet.has(sku)) return "Seller Fulfilled";
-  if (ship || wfsEnabledRaw !== undefined) return "Seller Fulfilled";
+  if (ship || wfsEligibilityProvided) return "Seller Fulfilled";
   return "Unknown";
 }
 
@@ -1213,6 +1232,25 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       page?.elements ??
       page?.list?.elements?.item ??
       [];
+
+    if (list[0]) {
+      const sample = list[0];
+      console.log(
+        `[WFS:catalog] sample item keys=${Object.keys(sample).join(",")} | wfs-like fields=` +
+          JSON.stringify({
+            shippingProgramType: sample.shippingProgramType,
+            fulfillmentProgramType: sample.fulfillmentProgramType,
+            wfsEnabled: sample.wfsEnabled,
+            wfsEligible: sample.wfsEligible,
+            eligibleForWfs: sample.eligibleForWfs,
+            wfsEligibility: sample.wfsEligibility,
+            wfsStatus: sample.wfsStatus,
+            wfs: sample.wfs,
+            fulfillmentEligibility: sample.fulfillmentEligibility,
+            additionalAttributes: sample.additionalAttributes,
+          })
+      );
+    }
 
     const items: CatalogIdentifier[] = list
       .map((it: any) => ({
@@ -1365,12 +1403,11 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     let pagesThisRun = stateRow.pages_this_run ?? 0;
     let itemsThisRun = stateRow.items_this_run ?? 0;
 
-    // Decide if a fresh full re-sync is due
-    const lastFull = stateRow.last_full_sync_at ? new Date(stateRow.last_full_sync_at).getTime() : 0;
-    const fullDue = Date.now() - lastFull > FULL_RESYNC_INTERVAL_MS;
-    const startingFresh = data.reset || stateRow.status === "idle" || stateRow.status === "done" || stateRow.status === "error";
+    // Every sync starts fresh: drop the cache and re-pull from Walmart.
+    // Resume only happens mid-run (status === "running").
+    const startingFresh = data.reset || stateRow.status !== "running";
 
-    if (data.reset || (startingFresh && fullDue)) {
+    if (startingFresh) {
       const { error: clearErr } = await supabaseAdmin
         .from("catalog_items")
         .delete()
@@ -1380,10 +1417,6 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
       cursor = null;
       lifecycle = "ACTIVE";
       publishedStatus = "PUBLISHED";
-      pagesThisRun = 0;
-      itemsThisRun = 0;
-    } else if (startingFresh) {
-      // Resume: keep saved cursor/lifecycle/publishedStatus, reset run counters
       pagesThisRun = 0;
       itemsThisRun = 0;
     }
