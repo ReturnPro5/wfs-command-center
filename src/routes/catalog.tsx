@@ -470,7 +470,7 @@ function CatalogPage() {
                       const fClass =
                         f === "Walmart Fulfilled"
                           ? "bg-primary/15 text-primary"
-                          : f === "Seller Fulfilled (WFS eligible)"
+                          : f === "Seller Fulfilled (WFS Eligible)"
                           ? "bg-status-warning/15 text-status-warning"
                           : f === "Seller Fulfilled"
                           ? "bg-muted text-muted-foreground"
