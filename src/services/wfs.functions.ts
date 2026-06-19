@@ -1233,6 +1233,25 @@ export const getCatalogPage = createServerFn({ method: "POST" })
       page?.list?.elements?.item ??
       [];
 
+    if (list[0]) {
+      const sample = list[0];
+      console.log(
+        `[WFS:catalog] sample item keys=${Object.keys(sample).join(",")} | wfs-like fields=` +
+          JSON.stringify({
+            shippingProgramType: sample.shippingProgramType,
+            fulfillmentProgramType: sample.fulfillmentProgramType,
+            wfsEnabled: sample.wfsEnabled,
+            wfsEligible: sample.wfsEligible,
+            eligibleForWfs: sample.eligibleForWfs,
+            wfsEligibility: sample.wfsEligibility,
+            wfsStatus: sample.wfsStatus,
+            wfs: sample.wfs,
+            fulfillmentEligibility: sample.fulfillmentEligibility,
+            additionalAttributes: sample.additionalAttributes,
+          })
+      );
+    }
+
     const items: CatalogIdentifier[] = list
       .map((it: any) => ({
         sku: String(it.sku ?? it.SKU ?? it.mart_sku ?? ""),
