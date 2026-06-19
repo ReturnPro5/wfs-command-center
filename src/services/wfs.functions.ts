@@ -1321,9 +1321,10 @@ function createFulfillmentReportParser() {
     push(text: string, final = false) {
       buffer += text;
       const lines = buffer.split("\n");
-      buffer = final ? "" : lines.pop() ?? "";
+      const tail = lines.pop() ?? "";
+      buffer = final ? "" : tail;
       for (const line of lines) ingestLine(line);
-      if (final && buffer) ingestLine(buffer);
+      if (final && tail) ingestLine(tail);
     },
     map,
   };
@@ -1431,8 +1432,8 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
         throw new Error(`item report is ${rawStatus || "not ready"}`);
       }
 
-      const downloaded = await walmartApi.downloadReport(requestId);
-      const map = parseFulfillmentReport(downloaded.body);
+      const downloaded = await walmartApi.downloadReportFile(requestId);
+      const map = await parseFulfillmentReportFile(downloaded.bytes, downloaded.contentType);
       if (map.size === 0) throw new Error("item report did not include fulfillment rows");
       console.log(`[WFS:catalog] item report fulfillment rows=${map.size}`);
       fulfillmentReportRequest = null;
