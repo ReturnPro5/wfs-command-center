@@ -1384,12 +1384,11 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
     let pagesThisRun = stateRow.pages_this_run ?? 0;
     let itemsThisRun = stateRow.items_this_run ?? 0;
 
-    // Decide if a fresh full re-sync is due
-    const lastFull = stateRow.last_full_sync_at ? new Date(stateRow.last_full_sync_at).getTime() : 0;
-    const fullDue = Date.now() - lastFull > FULL_RESYNC_INTERVAL_MS;
-    const startingFresh = data.reset || stateRow.status === "idle" || stateRow.status === "done" || stateRow.status === "error";
+    // Every sync starts fresh: drop the cache and re-pull from Walmart.
+    // Resume only happens mid-run (status === "running").
+    const startingFresh = data.reset || stateRow.status !== "running";
 
-    if (data.reset || (startingFresh && fullDue)) {
+    if (startingFresh) {
       const { error: clearErr } = await supabaseAdmin
         .from("catalog_items")
         .delete()
@@ -1399,10 +1398,6 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
       cursor = null;
       lifecycle = "ACTIVE";
       publishedStatus = "PUBLISHED";
-      pagesThisRun = 0;
-      itemsThisRun = 0;
-    } else if (startingFresh) {
-      // Resume: keep saved cursor/lifecycle/publishedStatus, reset run counters
       pagesThisRun = 0;
       itemsThisRun = 0;
     }
