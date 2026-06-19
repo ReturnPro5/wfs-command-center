@@ -1105,7 +1105,7 @@ function aggregateDailyTrends(orders: RawOrder[]): SalesTrend[] {
 // ─── Catalog Identifiers (SKU / GTIN / UPC) ─────────────
 export type FulfillmentType =
   | "Walmart Fulfilled"
-  | "Seller Fulfilled (WFS eligible)"
+  | "Seller Fulfilled (WFS Eligible)"
   | "Seller Fulfilled"
   | "Unknown";
 
@@ -1129,8 +1129,15 @@ export interface CatalogIdentifier {
 // 1) WFS inventory membership by SKU → item is actively Walmart-fulfilled.
 // 2) /v3/items fulfillment fields when present.
 // 3) If we know the SKU is not in WFS inventory, classify as seller-fulfilled.
-function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
+function deriveFulfillment(
+  it: any,
+  wfsSkuSet?: Set<string>,
+  itemReportFulfillment?: Map<string, FulfillmentType>
+): FulfillmentType {
   const sku = String(it?.sku ?? it?.SKU ?? it?.mart_sku ?? "");
+  const reported = sku ? itemReportFulfillment?.get(sku) : undefined;
+  if (reported) return reported;
+
   const ship = String(
     it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
   ).toUpperCase();
@@ -1161,7 +1168,7 @@ function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
 
   if (sku && wfsSkuSet?.has(sku)) return "Walmart Fulfilled";
   if (ship.includes("WFS")) return "Walmart Fulfilled";
-  if (wfsEligible) return "Seller Fulfilled (WFS eligible)";
+  if (wfsEligible) return "Seller Fulfilled (WFS Eligible)";
   if (sku && wfsSkuSet && !wfsSkuSet.has(sku)) return "Seller Fulfilled";
   if (ship || wfsEligibilityProvided) return "Seller Fulfilled";
   return "Unknown";
@@ -1170,6 +1177,157 @@ function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
 async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
   const inventory = await fetchAllInventory();
   return new Set(inventory.map((item) => item.sku).filter(Boolean));
+}
+
+const FULFILLMENT_REPORT_CACHE_TTL_MS = 2 * 60 * 1000;
+let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, FulfillmentType>> } | null = null;
+let fulfillmentReportRequest: { ts: number; requestId: string } | null = null;
+
+function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (!v) return null;
+  if (v.includes("wfs") && v.includes("eligible")) return "Seller Fulfilled (WFS Eligible)";
+  if (v.includes("walmart") && v.includes("fulfilled")) return "Walmart Fulfilled";
+  if (v.includes("seller") && v.includes("fulfilled")) return "Seller Fulfilled";
+  return null;
+}
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  const s = text.replace(/^\uFEFF/, "");
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quoted) {
+      if (ch === '"' && s[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (ch !== "\r") {
+      cell += ch;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parseFulfillmentReport(csv: string): Map<string, FulfillmentType> {
+  const rows = parseCsv(csv);
+  const header = rows[0]?.map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "")) ?? [];
+  const skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku");
+  const fulfillmentIdx = header.findIndex((h) => h === "fulfillmenttype" || h === "fulfillment");
+  const map = new Map<string, FulfillmentType>();
+  if (skuIdx < 0 || fulfillmentIdx < 0) return map;
+  for (const row of rows.slice(1)) {
+    const sku = row[skuIdx]?.trim();
+    const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
+    if (sku && fulfillment) map.set(sku, fulfillment);
+  }
+  return map;
+}
+
+function getReportRequestId(payload: any): string | null {
+  return String(
+    payload?.requestId ??
+      payload?.requestID ??
+      payload?.id ??
+      payload?.payload?.requestId ??
+      payload?.payload?.requestID ??
+      ""
+  ) || null;
+}
+
+function getReadyReportRequestId(payload: any): string | null {
+  const list =
+    payload?.requests ??
+    payload?.reportRequests ??
+    payload?.payload?.requests ??
+    payload?.payload?.reportRequests ??
+    payload?.payload?.reportRequest ??
+    payload?.elements ??
+    [];
+  const rows = Array.isArray(list) ? list : [list].filter(Boolean);
+  for (const row of rows) {
+    const status = String(row?.status ?? row?.requestStatus ?? "").toUpperCase();
+    if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(status)) {
+      const id = getReportRequestId(row);
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
+async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentType>> {
+  if (fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
+    return fulfillmentReportCache.promise;
+  }
+
+  const promise = (async () => {
+    try {
+      if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
+        let requestId: string | null = null;
+        try {
+          requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
+        } catch (err) {
+          console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
+        }
+        if (!requestId) {
+          const request = await walmartApi.createItemReportRequest();
+          requestId = getReportRequestId(request);
+        }
+        if (!requestId) throw new Error(`missing requestId in item report response`);
+        fulfillmentReportRequest = { ts: Date.now(), requestId };
+      }
+      const requestId = fulfillmentReportRequest.requestId;
+
+      const lastStatus = await walmartApi.getReportRequestStatus(requestId);
+      const rawStatus = String(
+        lastStatus?.status ??
+          lastStatus?.requestStatus ??
+          lastStatus?.payload?.status ??
+          lastStatus?.payload?.requestStatus ??
+          ""
+      ).toUpperCase();
+      if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
+      if (!/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) {
+        throw new Error(`item report is ${rawStatus || "not ready"}`);
+      }
+
+      const downloaded = await walmartApi.downloadReport(requestId);
+      const map = parseFulfillmentReport(downloaded.body);
+      if (map.size === 0) throw new Error("item report did not include fulfillment rows");
+      console.log(`[WFS:catalog] item report fulfillment rows=${map.size}`);
+      fulfillmentReportRequest = null;
+      return map;
+    } catch (err) {
+      console.warn("[WFS:catalog] item report fulfillment unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
+      return new Map<string, FulfillmentType>();
+    }
+  })();
+
+  fulfillmentReportCache = { ts: Date.now(), promise };
+  promise.catch(() => { fulfillmentReportCache = null; });
+  return promise;
 }
 
 export interface CatalogPage {
@@ -1200,7 +1358,10 @@ export const getCatalogPage = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<CatalogPage> => {
     await getWalmartAccessToken();
-    const wfsSkuSet = await getWfsFulfilledSkuSet();
+    const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+      getWfsFulfilledSkuSet(),
+      getItemReportFulfillmentMap(),
+    ]);
     const lifecycle = data.lifecycle ?? "ACTIVE";
     const publishedStatus = data.publishedStatus ?? "PUBLISHED";
     const cursor = data.cursor ?? "*"; // "*" = first page in cursor mode
@@ -1265,7 +1426,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
         ),
         condition: String(it.condition ?? it.itemCondition ?? "New"),
         publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
-        fulfillment: deriveFulfillment(it, wfsSkuSet),
+        fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
       }))
       .filter((i) => i.sku);
 
@@ -1549,7 +1710,10 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<BackfillFulfillmentResult & { nextAfterSku: string | null }> => {
     const batchSize = data.batchSize ?? 40;
     await getWalmartAccessToken();
-    const wfsSkuSet = await getWfsFulfilledSkuSet();
+    const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+      getWfsFulfilledSkuSet(),
+      getItemReportFulfillmentMap(),
+    ]);
 
     // Walk Unknown rows by sku cursor so each SKU is touched at most once per run,
     // even if the update leaves it as "Unknown" (otherwise we'd re-fetch forever).
@@ -1583,7 +1747,7 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
             (Array.isArray(payload?.itemResponse) ? payload.itemResponse[0] : payload?.itemResponse) ??
             (Array.isArray(payload?.items) ? payload.items[0] : payload?.items) ??
             payload;
-          const fulfillment = deriveFulfillment(candidate, wfsSkuSet);
+          const fulfillment = deriveFulfillment(candidate, wfsSkuSet, itemReportFulfillment);
           const { error: uErr } = await supabaseAdmin
             .from("catalog_items")
             .update({ fulfillment, last_synced_at: now })
@@ -1631,7 +1795,10 @@ async function getCatalogPageInternal(
   publishedStatus: string = "PUBLISHED"
 ): Promise<CatalogPage> {
   await getWalmartAccessToken();
-  const wfsSkuSet = await getWfsFulfilledSkuSet();
+  const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+    getWfsFulfilledSkuSet(),
+    getItemReportFulfillmentMap(),
+  ]);
   const cursor = cursorIn ?? "*";
 
   const pubIdx = PUBLISHED_STATUS_ORDER.indexOf(publishedStatus);
@@ -1670,7 +1837,7 @@ async function getCatalogPageInternal(
       ),
       condition: String(it.condition ?? it.itemCondition ?? "New"),
       publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
-      fulfillment: deriveFulfillment(it, wfsSkuSet),
+      fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
       category: String(it.category ?? it.productType ?? it.primaryCategory ?? ""),
     }))
     .filter((i) => i.sku);

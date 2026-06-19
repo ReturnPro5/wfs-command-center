@@ -302,7 +302,7 @@ function CatalogPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Catalog Identifiers</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              SKU, GTIN, and UPC for every item in your catalog. Cached locally — only new/changed items are pulled.
+              SKU, GTIN, UPC, and fulfillment status for every active published catalog item.
             </p>
           </div>
           <div className="flex gap-2">
@@ -470,7 +470,7 @@ function CatalogPage() {
                       const fClass =
                         f === "Walmart Fulfilled"
                           ? "bg-primary/15 text-primary"
-                          : f === "Seller Fulfilled (WFS eligible)"
+                          : f === "Seller Fulfilled (WFS Eligible)"
                           ? "bg-status-warning/15 text-status-warning"
                           : f === "Seller Fulfilled"
                           ? "bg-muted text-muted-foreground"

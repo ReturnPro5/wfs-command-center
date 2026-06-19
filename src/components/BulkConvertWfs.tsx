@@ -60,7 +60,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     return items
       .filter((r) => {
         const f = r.fulfillment ?? "Unknown";
-        if (f !== "Seller Fulfilled" && f !== "Seller Fulfilled (WFS eligible)") return false;
+        if (f !== "Seller Fulfilled" && f !== "Seller Fulfilled (WFS Eligible)") return false;
         const cond = (r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
         return cond === "openbox";
       })
