@@ -250,7 +250,10 @@ export async function listItemReportRequests(): Promise<any> {
 }
 
 export async function downloadReport(requestId: string): Promise<{ body: string; contentType: string }> {
-  const response = await walmartFetchRaw(`/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`);
+  const response = await walmartFetchRaw(
+    `/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`,
+    { headers: { Accept: "application/json", "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" } },
+  );
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
   if (contentType.includes("json")) {
