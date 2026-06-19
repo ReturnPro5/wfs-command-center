@@ -206,9 +206,14 @@ export async function getItem(sku: string) {
 // The on-request ITEM report v4 is Walmart's documented source for
 // fulfillment type: WFS Eligible, Walmart Fulfilled, or Seller Fulfilled.
 export async function createItemReportRequest(): Promise<any> {
+  const reportHeaders = {
+    "WM_MARKET": "us",
+    "WM_GLOBAL_VERSION": "3.1",
+  };
   try {
     return await walmartFetch<any>("/v3/reports/reportRequests", {
       method: "POST",
+      headers: reportHeaders,
       body: JSON.stringify({ reportType: "ITEM", reportVersion: "v4", format: "CSV" }),
     });
   } catch (err) {
@@ -216,6 +221,7 @@ export async function createItemReportRequest(): Promise<any> {
     if (!/reportVersion|version|400/i.test(msg)) throw err;
     return walmartFetch<any>("/v3/reports/reportRequests", {
       method: "POST",
+      headers: reportHeaders,
       body: JSON.stringify({ reportType: "ITEM", format: "CSV" }),
     });
   }
