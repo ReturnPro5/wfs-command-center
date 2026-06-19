@@ -349,7 +349,7 @@ export async function downloadReportFile(requestId: string): Promise<{ bytes: Ui
       buffer = await file.arrayBuffer();
       finalContentType = file.headers.get("content-type") ?? "";
     } else {
-      return { body: text, contentType };
+      return { bytes: new TextEncoder().encode(text), contentType };
     }
   } else {
     buffer = await response.arrayBuffer();
