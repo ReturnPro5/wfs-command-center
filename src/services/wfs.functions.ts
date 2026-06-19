@@ -1300,25 +1300,18 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
       }
       const requestId = fulfillmentReportRequest.requestId;
 
-      let lastStatus: any = null;
-      let ready = false;
-      for (let i = 0; i < 10; i++) {
-        lastStatus = await walmartApi.getReportRequestStatus(requestId);
-        const rawStatus = String(
-          lastStatus?.status ??
-            lastStatus?.requestStatus ??
-            lastStatus?.payload?.status ??
-            lastStatus?.payload?.requestStatus ??
-            ""
-        ).toUpperCase();
-        if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) {
-          ready = true;
-          break;
-        }
-        if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+      const lastStatus = await walmartApi.getReportRequestStatus(requestId);
+      const rawStatus = String(
+        lastStatus?.status ??
+          lastStatus?.requestStatus ??
+          lastStatus?.payload?.status ??
+          lastStatus?.payload?.requestStatus ??
+          ""
+      ).toUpperCase();
+      if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
+      if (!/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) {
+        throw new Error(`item report is ${rawStatus || "not ready"}`);
       }
-      if (!ready) throw new Error("item report was not ready before the request timeout");
 
       const downloaded = await walmartApi.downloadReport(requestId);
       const map = parseFulfillmentReport(downloaded.body);
