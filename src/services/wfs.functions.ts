@@ -1192,7 +1192,7 @@ function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
   return null;
 }
 
-function parseCsv(text: string): string[][] {
+function parseCsv(text: string, delimiter = ","): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -1212,7 +1212,7 @@ function parseCsv(text: string): string[][] {
       continue;
     }
     if (ch === '"') quoted = true;
-    else if (ch === ",") {
+    else if (ch === delimiter) {
       row.push(cell);
       cell = "";
     } else if (ch === "\n") {
@@ -1231,13 +1231,29 @@ function parseCsv(text: string): string[][] {
   return rows;
 }
 
+function detectDelimiter(text: string): string {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+  const tabs = (firstLine.match(/\t/g) ?? []).length;
+  const commas = (firstLine.match(/,/g) ?? []).length;
+  const pipes = (firstLine.match(/\|/g) ?? []).length;
+  if (tabs >= commas && tabs >= pipes && tabs > 0) return "\t";
+  if (pipes > commas && pipes > 0) return "|";
+  return ",";
+}
+
 function parseFulfillmentReport(csv: string): Map<string, FulfillmentType> {
-  const rows = parseCsv(csv);
+  const delimiter = detectDelimiter(csv);
+  const rows = parseCsv(csv, delimiter);
   const header = rows[0]?.map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "")) ?? [];
-  const skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku");
-  const fulfillmentIdx = header.findIndex((h) => h === "fulfillmenttype" || h === "fulfillment");
+  const skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku" || h === "merchantsku");
+  const fulfillmentIdx = header.findIndex(
+    (h) => h === "fulfillmenttype" || h === "fulfillment" || h === "wfsstatus" || h === "wfseligibility" || h === "shippingprogramtype",
+  );
   const map = new Map<string, FulfillmentType>();
-  if (skuIdx < 0 || fulfillmentIdx < 0) return map;
+  if (skuIdx < 0 || fulfillmentIdx < 0) {
+    console.warn(`[WFS:catalog] item report header missing sku/fulfillment columns. header=${header.slice(0, 30).join("|")}`);
+    return map;
+  }
   for (const row of rows.slice(1)) {
     const sku = row[skuIdx]?.trim();
     const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
@@ -1245,6 +1261,7 @@ function parseFulfillmentReport(csv: string): Map<string, FulfillmentType> {
   }
   return map;
 }
+
 
 function getReportRequestId(payload: any): string | null {
   return String(

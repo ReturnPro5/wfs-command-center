@@ -250,25 +250,48 @@ export async function listItemReportRequests(): Promise<any> {
 }
 
 export async function downloadReport(requestId: string): Promise<{ body: string; contentType: string }> {
-  const response = await walmartFetchRaw(`/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`);
+  const response = await walmartFetchRaw(
+    `/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`,
+    { headers: { Accept: "application/json", "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" } },
+  );
   const contentType = response.headers.get("content-type") ?? "";
-  const body = await response.text();
+
+  // Step 1: if Walmart returns JSON with a downloadURL, follow it; otherwise the
+  // response IS the file (zip/csv/tsv).
+  let buffer: ArrayBuffer;
+  let finalContentType = contentType;
   if (contentType.includes("json")) {
+    const text = await response.text();
+    let url: string | undefined;
     try {
-      const parsed = JSON.parse(body);
-      const url = parsed?.downloadURL ?? parsed?.downloadUrl ?? parsed?.url ?? parsed?.payload?.downloadURL ?? parsed?.payload?.downloadUrl;
-      if (typeof url === "string" && /^https?:\/\//i.test(url)) {
-        const file = await fetch(url, { headers: { Accept: "text/csv,*/*" }, signal: AbortSignal.timeout(30_000) });
-        if (!file.ok) throw new Error(`report file download failed [${file.status}]`);
-        return { body: await file.text(), contentType: file.headers.get("content-type") ?? "" };
-      }
-    } catch (err) {
-      if (err instanceof SyntaxError) return { body, contentType };
-      throw err;
+      const parsed = JSON.parse(text);
+      url = parsed?.downloadURL ?? parsed?.downloadUrl ?? parsed?.url ?? parsed?.payload?.downloadURL ?? parsed?.payload?.downloadUrl;
+    } catch { /* fall through */ }
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+      const file = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      if (!file.ok) throw new Error(`report file download failed [${file.status}]`);
+      buffer = await file.arrayBuffer();
+      finalContentType = file.headers.get("content-type") ?? "";
+    } else {
+      return { body: text, contentType };
     }
+  } else {
+    buffer = await response.arrayBuffer();
   }
-  return { body, contentType };
+
+  // Step 2: detect ZIP (PK\x03\x04) and extract the first entry as text.
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    const { unzipSync, strFromU8 } = await import("fflate");
+    const entries = unzipSync(bytes);
+    const names = Object.keys(entries);
+    if (names.length === 0) throw new Error("report zip is empty");
+    const pick = names.find((n) => /\.(csv|tsv|txt)$/i.test(n)) ?? names[0];
+    return { body: strFromU8(entries[pick]), contentType: "text/plain" };
+  }
+  return { body: new TextDecoder().decode(bytes), contentType: finalContentType };
 }
+
 
 // ─── Feeds (WFS Conversion) ─────────────────────────────
 // Submit a feed. Used for feedType=OMNI_WFS (convert Seller-Fulfilled items to WFS).
