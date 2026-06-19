@@ -210,30 +210,34 @@ export async function createItemReportRequest(): Promise<any> {
     "WM_MARKET": "us",
     "WM_GLOBAL_VERSION": "3.1",
   };
-  try {
-    return await walmartFetch<any>("/v3/reports/reportRequests", {
+  async function postItemReport(path: string, includeVersion: boolean) {
+    return walmartFetch<any>(path, {
       method: "POST",
       headers: reportHeaders,
-      body: JSON.stringify({ reportType: "ITEM", reportVersion: "v4", format: "CSV" }),
+      body: JSON.stringify({ reportType: "ITEM", ...(includeVersion ? { reportVersion: "v4" } : {}), format: "CSV" }),
     });
+  }
+  try {
+    return await postItemReport("/v3/reports/reportRequests", true);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (!/reportVersion|version|400/i.test(msg)) throw err;
-    return walmartFetch<any>("/v3/reports/reportRequests", {
-      method: "POST",
-      headers: reportHeaders,
-      body: JSON.stringify({ reportType: "ITEM", format: "CSV" }),
-    });
+    if (/404|CONTENT_NOT_FOUND/i.test(msg)) return postItemReport("/v3/reports/requests", true);
+    if (/reportVersion|version|400/i.test(msg)) return postItemReport("/v3/reports/reportRequests", false);
+    throw err;
   }
 }
 
 export async function getReportRequestStatus(requestId: string): Promise<any> {
-  return walmartFetch<any>(`/v3/reports/reportRequests/${encodeURIComponent(requestId)}`, {
-    headers: {
-      "WM_MARKET": "us",
-      "WM_GLOBAL_VERSION": "3.1",
-    },
-  });
+  const headers = { "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" };
+  try {
+    return await walmartFetch<any>(`/v3/reports/reportRequests/${encodeURIComponent(requestId)}`, { headers });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/404|CONTENT_NOT_FOUND/i.test(msg)) {
+      return walmartFetch<any>(`/v3/reports/requests/${encodeURIComponent(requestId)}`, { headers });
+    }
+    throw err;
+  }
 }
 
 export async function downloadReport(requestId: string): Promise<{ body: string; contentType: string }> {
