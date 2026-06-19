@@ -1325,7 +1325,10 @@ export const getCatalogPage = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<CatalogPage> => {
     await getWalmartAccessToken();
-    const wfsSkuSet = await getWfsFulfilledSkuSet();
+    const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+      getWfsFulfilledSkuSet(),
+      getItemReportFulfillmentMap(),
+    ]);
     const lifecycle = data.lifecycle ?? "ACTIVE";
     const publishedStatus = data.publishedStatus ?? "PUBLISHED";
     const cursor = data.cursor ?? "*"; // "*" = first page in cursor mode
@@ -1390,7 +1393,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
         ),
         condition: String(it.condition ?? it.itemCondition ?? "New"),
         publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
-        fulfillment: deriveFulfillment(it, wfsSkuSet),
+        fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
       }))
       .filter((i) => i.sku);
 
@@ -1674,7 +1677,10 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<BackfillFulfillmentResult & { nextAfterSku: string | null }> => {
     const batchSize = data.batchSize ?? 40;
     await getWalmartAccessToken();
-    const wfsSkuSet = await getWfsFulfilledSkuSet();
+    const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+      getWfsFulfilledSkuSet(),
+      getItemReportFulfillmentMap(),
+    ]);
 
     // Walk Unknown rows by sku cursor so each SKU is touched at most once per run,
     // even if the update leaves it as "Unknown" (otherwise we'd re-fetch forever).
@@ -1708,7 +1714,7 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
             (Array.isArray(payload?.itemResponse) ? payload.itemResponse[0] : payload?.itemResponse) ??
             (Array.isArray(payload?.items) ? payload.items[0] : payload?.items) ??
             payload;
-          const fulfillment = deriveFulfillment(candidate, wfsSkuSet);
+          const fulfillment = deriveFulfillment(candidate, wfsSkuSet, itemReportFulfillment);
           const { error: uErr } = await supabaseAdmin
             .from("catalog_items")
             .update({ fulfillment, last_synced_at: now })
@@ -1756,7 +1762,10 @@ async function getCatalogPageInternal(
   publishedStatus: string = "PUBLISHED"
 ): Promise<CatalogPage> {
   await getWalmartAccessToken();
-  const wfsSkuSet = await getWfsFulfilledSkuSet();
+  const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+    getWfsFulfilledSkuSet(),
+    getItemReportFulfillmentMap(),
+  ]);
   const cursor = cursorIn ?? "*";
 
   const pubIdx = PUBLISHED_STATUS_ORDER.indexOf(publishedStatus);
@@ -1795,7 +1804,7 @@ async function getCatalogPageInternal(
       ),
       condition: String(it.condition ?? it.itemCondition ?? "New"),
       publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
-      fulfillment: deriveFulfillment(it, wfsSkuSet),
+      fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
       category: String(it.category ?? it.productType ?? it.primaryCategory ?? ""),
     }))
     .filter((i) => i.sku);
