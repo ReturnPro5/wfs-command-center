@@ -1268,6 +1268,7 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
       if (!requestId) throw new Error(`missing requestId in item report response`);
 
       let lastStatus: any = request;
+      let ready = false;
       for (let i = 0; i < 10; i++) {
         lastStatus = i === 0 ? request : await walmartApi.getReportRequestStatus(requestId);
         const rawStatus = String(
@@ -1277,10 +1278,14 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
             lastStatus?.payload?.requestStatus ??
             ""
         ).toUpperCase();
-        if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) break;
+        if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) {
+          ready = true;
+          break;
+        }
         if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
+      if (!ready) throw new Error("item report was not ready before the request timeout");
 
       const downloaded = await walmartApi.downloadReport(requestId);
       const map = parseFulfillmentReport(downloaded.body);
