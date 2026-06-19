@@ -73,6 +73,30 @@ async function walmartFetch<T>(path: string, options: RequestInit = {}): Promise
   throw lastError ?? new Error(`Walmart API failed after ${MAX_RETRIES} retries: ${path}`);
 }
 
+async function walmartFetchRaw(path: string, options: RequestInit = {}): Promise<Response> {
+  const token = await getWalmartAccessToken();
+  const baseUrl = getBaseUrl();
+  const channelType = process.env.WALMART_CHANNEL_TYPE;
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...options,
+    signal: AbortSignal.timeout(30_000),
+    headers: {
+      "WM_SEC.ACCESS_TOKEN": token,
+      ...(channelType ? { "WM_CONSUMER.CHANNEL.TYPE": channelType } : {}),
+      "WM_SVC.NAME": "Walmart Marketplace",
+      "WM_QOS.CORRELATION_ID": crypto.randomUUID(),
+      "Accept": "application/json,text/csv,*/*",
+      ...((options.method && options.method !== "GET") ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Walmart API error [${response.status}] ${path}: ${text}`);
+  }
+  return response;
+}
+
 // ─── Inventory ──────────────────────────────────────────
 export async function getInventory(nextCursor?: string) {
   const params = new URLSearchParams({ limit: "200" });
@@ -176,6 +200,55 @@ export async function getItems(nextCursor?: string, lifecycleStatus?: string, pu
 
 export async function getItem(sku: string) {
   return walmartFetch<any>(`/v3/items/${encodeURIComponent(sku)}`);
+}
+
+// ─── Reports ────────────────────────────────────────────
+// The on-request ITEM report v4 is Walmart's documented source for
+// fulfillment type: WFS Eligible, Walmart Fulfilled, or Seller Fulfilled.
+export async function createItemReportRequest(): Promise<any> {
+  try {
+    return await walmartFetch<any>("/v3/reports/reportRequests", {
+      method: "POST",
+      body: JSON.stringify({ reportType: "ITEM", reportVersion: "v4", format: "CSV" }),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/reportVersion|version|400/i.test(msg)) throw err;
+    return walmartFetch<any>("/v3/reports/reportRequests", {
+      method: "POST",
+      body: JSON.stringify({ reportType: "ITEM", format: "CSV" }),
+    });
+  }
+}
+
+export async function getReportRequestStatus(requestId: string): Promise<any> {
+  return walmartFetch<any>(`/v3/reports/reportRequests/${encodeURIComponent(requestId)}`, {
+    headers: {
+      "WM_MARKET": "us",
+      "WM_GLOBAL_VERSION": "3.1",
+    },
+  });
+}
+
+export async function downloadReport(requestId: string): Promise<{ body: string; contentType: string }> {
+  const response = await walmartFetchRaw(`/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`);
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  if (contentType.includes("json")) {
+    try {
+      const parsed = JSON.parse(body);
+      const url = parsed?.downloadURL ?? parsed?.downloadUrl ?? parsed?.url ?? parsed?.payload?.downloadURL ?? parsed?.payload?.downloadUrl;
+      if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+        const file = await fetch(url, { headers: { Accept: "text/csv,*/*" }, signal: AbortSignal.timeout(30_000) });
+        if (!file.ok) throw new Error(`report file download failed [${file.status}]`);
+        return { body: await file.text(), contentType: file.headers.get("content-type") ?? "" };
+      }
+    } catch (err) {
+      if (err instanceof SyntaxError) return { body, contentType };
+      throw err;
+    }
+  }
+  return { body, contentType };
 }
 
 // ─── Feeds (WFS Conversion) ─────────────────────────────

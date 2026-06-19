@@ -1105,7 +1105,7 @@ function aggregateDailyTrends(orders: RawOrder[]): SalesTrend[] {
 // ─── Catalog Identifiers (SKU / GTIN / UPC) ─────────────
 export type FulfillmentType =
   | "Walmart Fulfilled"
-  | "Seller Fulfilled (WFS eligible)"
+  | "Seller Fulfilled (WFS Eligible)"
   | "Seller Fulfilled"
   | "Unknown";
 
@@ -1161,7 +1161,7 @@ function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
 
   if (sku && wfsSkuSet?.has(sku)) return "Walmart Fulfilled";
   if (ship.includes("WFS")) return "Walmart Fulfilled";
-  if (wfsEligible) return "Seller Fulfilled (WFS eligible)";
+  if (wfsEligible) return "Seller Fulfilled (WFS Eligible)";
   if (sku && wfsSkuSet && !wfsSkuSet.has(sku)) return "Seller Fulfilled";
   if (ship || wfsEligibilityProvided) return "Seller Fulfilled";
   return "Unknown";
