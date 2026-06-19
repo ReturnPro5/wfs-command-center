@@ -1181,6 +1181,7 @@ async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
 
 const FULFILLMENT_REPORT_CACHE_TTL_MS = 20 * 60 * 1000;
 let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, FulfillmentType>> } | null = null;
+let fulfillmentReportRequest: { ts: number; requestId: string } | null = null;
 
 function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
   const v = String(value ?? "").trim().toLowerCase();
@@ -1263,14 +1264,18 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
 
   const promise = (async () => {
     try {
-      const request = await walmartApi.createItemReportRequest();
-      const requestId = getReportRequestId(request);
-      if (!requestId) throw new Error(`missing requestId in item report response`);
+      if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
+        const request = await walmartApi.createItemReportRequest();
+        const requestId = getReportRequestId(request);
+        if (!requestId) throw new Error(`missing requestId in item report response`);
+        fulfillmentReportRequest = { ts: Date.now(), requestId };
+      }
+      const requestId = fulfillmentReportRequest.requestId;
 
-      let lastStatus: any = request;
+      let lastStatus: any = null;
       let ready = false;
       for (let i = 0; i < 10; i++) {
-        lastStatus = i === 0 ? request : await walmartApi.getReportRequestStatus(requestId);
+        lastStatus = await walmartApi.getReportRequestStatus(requestId);
         const rawStatus = String(
           lastStatus?.status ??
             lastStatus?.requestStatus ??
@@ -1290,6 +1295,7 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
       const downloaded = await walmartApi.downloadReport(requestId);
       const map = parseFulfillmentReport(downloaded.body);
       console.log(`[WFS:catalog] item report fulfillment rows=${map.size}`);
+      fulfillmentReportRequest = null;
       return map;
     } catch (err) {
       console.warn("[WFS:catalog] item report fulfillment unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
