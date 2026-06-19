@@ -243,6 +243,12 @@ export async function getReportRequestStatus(requestId: string): Promise<any> {
   }
 }
 
+export async function listItemReportRequests(): Promise<any> {
+  const headers = { "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" };
+  const params = new URLSearchParams({ reportType: "ITEM", reportVersion: "v4" });
+  return walmartFetch<any>(`/v3/reports/reportRequests?${params}`, { headers });
+}
+
 export async function downloadReport(requestId: string): Promise<{ body: string; contentType: string }> {
   const response = await walmartFetchRaw(`/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`);
   const contentType = response.headers.get("content-type") ?? "";
