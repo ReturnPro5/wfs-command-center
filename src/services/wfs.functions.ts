@@ -1257,6 +1257,26 @@ function getReportRequestId(payload: any): string | null {
   ) || null;
 }
 
+function getReadyReportRequestId(payload: any): string | null {
+  const list =
+    payload?.requests ??
+    payload?.reportRequests ??
+    payload?.payload?.requests ??
+    payload?.payload?.reportRequests ??
+    payload?.payload?.reportRequest ??
+    payload?.elements ??
+    [];
+  const rows = Array.isArray(list) ? list : [list].filter(Boolean);
+  for (const row of rows) {
+    const status = String(row?.status ?? row?.requestStatus ?? "").toUpperCase();
+    if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(status)) {
+      const id = getReportRequestId(row);
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
 async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentType>> {
   if (fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
     return fulfillmentReportCache.promise;
@@ -1265,8 +1285,16 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
   const promise = (async () => {
     try {
       if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
-        const request = await walmartApi.createItemReportRequest();
-        const requestId = getReportRequestId(request);
+        let requestId: string | null = null;
+        try {
+          requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
+        } catch (err) {
+          console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
+        }
+        if (!requestId) {
+          const request = await walmartApi.createItemReportRequest();
+          requestId = getReportRequestId(request);
+        }
         if (!requestId) throw new Error(`missing requestId in item report response`);
         fulfillmentReportRequest = { ts: Date.now(), requestId };
       }
