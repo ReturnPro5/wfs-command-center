@@ -205,27 +205,86 @@ export async function getItem(sku: string) {
 // ─── Reports ────────────────────────────────────────────
 // The on-request ITEM report v4 is Walmart's documented source for
 // fulfillment type: WFS Eligible, Walmart Fulfilled, or Seller Fulfilled.
+const ITEM_REPORT_KEEP_COLUMNS = new Set(["SKU", "Fulfillment Type"]);
+const ITEM_REPORT_V4_COLUMNS = [
+  "SKU",
+  "Item ID",
+  "Product Name",
+  "Lifecycle Status",
+  "Publish Status",
+  "Status Change Reason",
+  "Product Category",
+  "Price",
+  "Currency",
+  "Buy Box Item Price",
+  "Buy Box Shipping Price",
+  "Buy Box Eligible",
+  "MSRP",
+  "Product Tax Code",
+  "Ship Methods",
+  "Shipping Weight",
+  "Fulfillment Lag Time",
+  "Fulfillment Type",
+  "WFS Sales Restriction",
+  "WPID",
+  "GTIN",
+  "UPC",
+  "Item Page URL",
+  "Primary Image URL",
+  "Shelf Name",
+  "Primary Category Path",
+  "Brand",
+  "Offer Start Date",
+  "Offer End Date",
+  "Item Creation Date",
+  "Item Last Updated",
+  "Reviews Count",
+  "Average Rating",
+  "Searchable?",
+  "Variant Group Id",
+  "Primary Variant?",
+  "Variant Grouping Attributes",
+  "Variant Grouping Values",
+  "Competitor URL",
+  "Competitor Price",
+  "Competitor Ship Price",
+  "Competitor Last Date Fetched",
+  "Repricer Strategy",
+  "Minimum Seller Allowed Price",
+  "Maximum Seller Allowed Price",
+  "Repricer Status",
+];
+
 export async function createItemReportRequest(): Promise<any> {
   const reportHeaders = {
     "WM_MARKET": "us",
     "WM_GLOBAL_VERSION": "3.1",
   };
-  async function postItemReport(path: string, includeVersion: boolean) {
+  async function postItemReport(path: string, includeVersion: boolean, filtered: boolean) {
     const params = new URLSearchParams({
       reportType: "ITEM",
       ...(includeVersion ? { reportVersion: "v4" } : {}),
     });
+    const body = filtered
+      ? {
+          excludeColumns: ITEM_REPORT_V4_COLUMNS.filter((column) => !ITEM_REPORT_KEEP_COLUMNS.has(column)),
+        }
+      : undefined;
     return walmartFetch<any>(`${path}?${params}`, {
       method: "POST",
       headers: reportHeaders,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
   }
   try {
-    return await postItemReport("/v3/reports/reportRequests", true);
+    return await postItemReport("/v3/reports/reportRequests", true, true);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (/404|CONTENT_NOT_FOUND/i.test(msg)) return postItemReport("/v3/reports/requests", true);
-    if (/reportVersion|version|400/i.test(msg)) return postItemReport("/v3/reports/reportRequests", false);
+    if (/excludeColumns|column|filter|payload|body|400/i.test(msg)) {
+      return postItemReport("/v3/reports/reportRequests", true, false);
+    }
+    if (/404|CONTENT_NOT_FOUND/i.test(msg)) return postItemReport("/v3/reports/requests", true, true);
+    if (/reportVersion|version/i.test(msg)) return postItemReport("/v3/reports/reportRequests", false, true);
     throw err;
   }
 }
@@ -250,6 +309,23 @@ export async function listItemReportRequests(): Promise<any> {
 }
 
 export async function downloadReport(requestId: string): Promise<{ body: string; contentType: string }> {
+  const { bytes, contentType } = await downloadReportFile(requestId);
+
+  // Detect ZIP (PK\x03\x04) and extract the first text entry. This helper is
+  // only used for small reports; fulfillment parsing uses streaming code in the
+  // caller so huge Item reports don't allocate the full unzipped file at once.
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    const { unzipSync, strFromU8 } = await import("fflate");
+    const entries = unzipSync(bytes);
+    const names = Object.keys(entries);
+    if (names.length === 0) throw new Error("report zip is empty");
+    const pick = names.find((n) => /\.(csv|tsv|txt)$/i.test(n)) ?? names[0];
+    return { body: strFromU8(entries[pick]), contentType: "text/plain" };
+  }
+  return { body: new TextDecoder().decode(bytes), contentType };
+}
+
+export async function downloadReportFile(requestId: string): Promise<{ bytes: Uint8Array; contentType: string }> {
   const response = await walmartFetchRaw(
     `/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`,
     { headers: { Accept: "application/json", "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" } },
@@ -279,17 +355,7 @@ export async function downloadReport(requestId: string): Promise<{ body: string;
     buffer = await response.arrayBuffer();
   }
 
-  // Step 2: detect ZIP (PK\x03\x04) and extract the first entry as text.
-  const bytes = new Uint8Array(buffer);
-  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
-    const { unzipSync, strFromU8 } = await import("fflate");
-    const entries = unzipSync(bytes);
-    const names = Object.keys(entries);
-    if (names.length === 0) throw new Error("report zip is empty");
-    const pick = names.find((n) => /\.(csv|tsv|txt)$/i.test(n)) ?? names[0];
-    return { body: strFromU8(entries[pick]), contentType: "text/plain" };
-  }
-  return { body: new TextDecoder().decode(bytes), contentType: finalContentType };
+  return { bytes: new Uint8Array(buffer), contentType: finalContentType };
 }
 
 
