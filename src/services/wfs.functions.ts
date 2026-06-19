@@ -1129,8 +1129,15 @@ export interface CatalogIdentifier {
 // 1) WFS inventory membership by SKU → item is actively Walmart-fulfilled.
 // 2) /v3/items fulfillment fields when present.
 // 3) If we know the SKU is not in WFS inventory, classify as seller-fulfilled.
-function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
+function deriveFulfillment(
+  it: any,
+  wfsSkuSet?: Set<string>,
+  itemReportFulfillment?: Map<string, FulfillmentType>
+): FulfillmentType {
   const sku = String(it?.sku ?? it?.SKU ?? it?.mart_sku ?? "");
+  const reported = sku ? itemReportFulfillment?.get(sku) : undefined;
+  if (reported) return reported;
+
   const ship = String(
     it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
   ).toUpperCase();
@@ -1170,6 +1177,124 @@ function deriveFulfillment(it: any, wfsSkuSet?: Set<string>): FulfillmentType {
 async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
   const inventory = await fetchAllInventory();
   return new Set(inventory.map((item) => item.sku).filter(Boolean));
+}
+
+const FULFILLMENT_REPORT_CACHE_TTL_MS = 20 * 60 * 1000;
+let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, FulfillmentType>> } | null = null;
+
+function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (!v) return null;
+  if (v.includes("wfs") && v.includes("eligible")) return "Seller Fulfilled (WFS Eligible)";
+  if (v.includes("walmart") && v.includes("fulfilled")) return "Walmart Fulfilled";
+  if (v.includes("seller") && v.includes("fulfilled")) return "Seller Fulfilled";
+  return null;
+}
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  const s = text.replace(/^\uFEFF/, "");
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quoted) {
+      if (ch === '"' && s[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (ch !== "\r") {
+      cell += ch;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parseFulfillmentReport(csv: string): Map<string, FulfillmentType> {
+  const rows = parseCsv(csv);
+  const header = rows[0]?.map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "")) ?? [];
+  const skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku");
+  const fulfillmentIdx = header.findIndex((h) => h === "fulfillmenttype" || h === "fulfillment");
+  const map = new Map<string, FulfillmentType>();
+  if (skuIdx < 0 || fulfillmentIdx < 0) return map;
+  for (const row of rows.slice(1)) {
+    const sku = row[skuIdx]?.trim();
+    const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
+    if (sku && fulfillment) map.set(sku, fulfillment);
+  }
+  return map;
+}
+
+function getReportRequestId(payload: any): string | null {
+  return String(
+    payload?.requestId ??
+      payload?.requestID ??
+      payload?.id ??
+      payload?.payload?.requestId ??
+      payload?.payload?.requestID ??
+      ""
+  ) || null;
+}
+
+async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentType>> {
+  if (fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
+    return fulfillmentReportCache.promise;
+  }
+
+  const promise = (async () => {
+    try {
+      const request = await walmartApi.createItemReportRequest();
+      const requestId = getReportRequestId(request);
+      if (!requestId) throw new Error(`missing requestId in item report response`);
+
+      let lastStatus: any = request;
+      for (let i = 0; i < 10; i++) {
+        lastStatus = i === 0 ? request : await walmartApi.getReportRequestStatus(requestId);
+        const rawStatus = String(
+          lastStatus?.status ??
+            lastStatus?.requestStatus ??
+            lastStatus?.payload?.status ??
+            lastStatus?.payload?.requestStatus ??
+            ""
+        ).toUpperCase();
+        if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) break;
+        if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+
+      const downloaded = await walmartApi.downloadReport(requestId);
+      const map = parseFulfillmentReport(downloaded.body);
+      console.log(`[WFS:catalog] item report fulfillment rows=${map.size}`);
+      return map;
+    } catch (err) {
+      console.warn("[WFS:catalog] item report fulfillment unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
+      return new Map<string, FulfillmentType>();
+    }
+  })();
+
+  fulfillmentReportCache = { ts: Date.now(), promise };
+  promise.catch(() => { fulfillmentReportCache = null; });
+  return promise;
 }
 
 export interface CatalogPage {
