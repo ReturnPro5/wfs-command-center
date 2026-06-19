@@ -1294,11 +1294,13 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
 
       const downloaded = await walmartApi.downloadReport(requestId);
       const map = parseFulfillmentReport(downloaded.body);
+      if (map.size === 0) throw new Error("item report did not include fulfillment rows");
       console.log(`[WFS:catalog] item report fulfillment rows=${map.size}`);
       fulfillmentReportRequest = null;
       return map;
     } catch (err) {
       console.warn("[WFS:catalog] item report fulfillment unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
+      fulfillmentReportCache = null;
       return new Map<string, FulfillmentType>();
     }
   })();
