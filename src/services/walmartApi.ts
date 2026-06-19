@@ -211,10 +211,13 @@ export async function createItemReportRequest(): Promise<any> {
     "WM_GLOBAL_VERSION": "3.1",
   };
   async function postItemReport(path: string, includeVersion: boolean) {
-    return walmartFetch<any>(path, {
+    const params = new URLSearchParams({
+      reportType: "ITEM",
+      ...(includeVersion ? { reportVersion: "v4" } : {}),
+    });
+    return walmartFetch<any>(`${path}?${params}`, {
       method: "POST",
       headers: reportHeaders,
-      body: JSON.stringify({ reportType: "ITEM", ...(includeVersion ? { reportVersion: "v4" } : {}), format: "CSV" }),
     });
   }
   try {
