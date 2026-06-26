@@ -1816,19 +1816,29 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
       added = skus.filter((s) => !existingSet.has(s)).length;
       updated = skus.length - added;
 
-      const rows = page.items.map((it) => ({
-        sku: it.sku,
-        product_name: it.productName,
-        gtin: it.gtin,
-        upc: it.upc,
-        lifecycle: page.lifecycle,
-        condition: it.condition ?? "New",
-        published_status: it.publishedStatus ?? publishedStatus,
-        fulfillment: it.fulfillment ?? "Unknown",
-        category: it.category ?? "",
-        last_seen_at: now,
-        last_synced_at: now,
-      }));
+      const rows = page.items.map((it) => {
+        const row: any = {
+          sku: it.sku,
+          product_name: it.productName,
+          gtin: it.gtin,
+          upc: it.upc,
+          lifecycle: page.lifecycle,
+          condition: it.condition ?? "New",
+          published_status: it.publishedStatus ?? publishedStatus,
+          fulfillment: it.fulfillment ?? "Unknown",
+          category: it.category ?? it.productType ?? "",
+          last_seen_at: now,
+          last_synced_at: now,
+        };
+        // Fields auto-populated from the Walmart Item Report v4. Only write
+        // when present so we don't blank out manually-imported values.
+        if (it.brand) row.brand = it.brand;
+        if (it.mainImageUrl) row.main_image_url = it.mainImageUrl;
+        if (typeof it.price === "number" && Number.isFinite(it.price)) row.price = it.price;
+        if (it.productType) row.product_type = it.productType;
+        return row;
+      });
+
       const CHUNK = 500;
       for (let i = 0; i < rows.length; i += CHUNK) {
         const slice = rows.slice(i, i + CHUNK);
