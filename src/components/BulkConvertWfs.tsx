@@ -924,12 +924,6 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         </tbody>
       </DataTableShell>
 
-      {truncated && (
-        <p className="text-xs text-muted-foreground">
-          Showing first {RENDER_CAP.toLocaleString()} of {filtered.length.toLocaleString()} matching rows. Narrow your
-          search to see more.
-        </p>
-      )}
 
       {eligibleAll.length === 0 && (
         <p className="text-sm text-muted-foreground">
