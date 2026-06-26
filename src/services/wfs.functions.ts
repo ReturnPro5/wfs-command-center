@@ -2344,18 +2344,19 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     try {
       for (const [subCategory, items] of groups) {
         const supplierItems = items.map((it) => {
-          const { r, gtin, isHazmat, length, width, height, weight } = it;
+          const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
           return {
             Visible: {
               [it.visibleKey]: {
-                manufacturer: String(r.manufacturer).trim(),
+                manufacturer,
                 mainImageUrl: String(r.main_image_url).trim(),
               },
             },
             Orderable: {
               sku: r.sku,
               productName: String(r.product_name).trim(),
-              brand: String(r.brand).trim(),
+              brand,
+
               productIdentifiers: {
                 productId: gtin,
                 productIdType: gtin.length === 12 ? "UPC" : "GTIN",
