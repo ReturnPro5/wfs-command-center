@@ -2395,7 +2395,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         preflightFailed.push({
           sku: r.sku,
           status: "MISSING_FIELDS",
-          reason: `Missing required field(s): ${missing.join(", ")} — fill via Import CSV`,
+          reason: `Missing required field(s): ${missing.join(", ")} — re-sync/re-enrich or fill via Import CSV`,
         });
         continue;
       }
