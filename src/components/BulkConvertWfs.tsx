@@ -37,7 +37,7 @@ type Row = CatalogIdentifier & { sds: SdsClassification };
 
 type SdsFilter = "ALL" | SdsRequirement;
 
-const RENDER_CAP = 2000;
+
 
 const DIM_TEMPLATE_HEADER = [
   "UPC",
