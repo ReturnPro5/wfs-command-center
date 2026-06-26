@@ -289,8 +289,17 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [eligibleAll]);
 
-  const visible = filtered.slice(0, RENDER_CAP);
-  const truncated = filtered.length > RENDER_CAP;
+  const [pageSize, setPageSize] = useState<number>(500);
+  const [page, setPage] = useState<number>(1);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  // Clamp page when filters or pageSize change.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+  const pageStart = (page - 1) * pageSize;
+  const pageEnd = Math.min(pageStart + pageSize, filtered.length);
+  const visible = filtered.slice(pageStart, pageEnd);
+  const truncated = false;
 
   const selectedFlagged = useMemo(() => {
     let n = 0;
@@ -301,8 +310,8 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     return n;
   }, [selected, eligibleAll]);
 
-  const allFilteredSelected =
-    filtered.length > 0 && filtered.every((r) => selected.has(r.sku));
+  const allPageSelected =
+    visible.length > 0 && visible.every((r) => selected.has(r.sku));
 
   function toggleOne(sku: string) {
     setSelected((prev) => {
@@ -313,17 +322,24 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     });
   }
 
-  function toggleAllFiltered() {
+  function toggleAllPage() {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (allFilteredSelected) {
-        for (const r of filtered) next.delete(r.sku);
+      if (allPageSelected) {
+        for (const r of visible) next.delete(r.sku);
       } else {
-        for (const r of filtered) next.add(r.sku);
+        for (const r of visible) next.add(r.sku);
       }
       return next;
     });
   }
+
+  function selectPageOnly() {
+    const next = new Set<string>();
+    for (const r of visible) next.add(r.sku);
+    setSelected(next);
+  }
+
 
   async function runConvert() {
     setSubmitting(true);
