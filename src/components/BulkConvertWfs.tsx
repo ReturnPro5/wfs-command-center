@@ -40,15 +40,11 @@ type SdsFilter = "ALL" | SdsRequirement;
 const RENDER_CAP = 2000;
 
 const DIM_TEMPLATE_HEADER = [
-  "SKU",
   "UPC",
-  "GTIN",
-  "Product Name",
-  "Length (in)",
-  "Width (in)",
-  "Height (in)",
-  "Weight (lb)",
-  "Country Of Origin",
+  "DimensionD",
+  "DimensionW",
+  "DimensionH",
+  "ShippingWeight",
 ] as const;
 
 function csvEscape(v: string): string {
@@ -56,7 +52,8 @@ function csvEscape(v: string): string {
 }
 function csvEscapeId(v: string): string {
   const s = (v ?? "").replace(/"/g, '""');
-  return s ? `="${s}"` : `""`;
+  // Leading apostrophe prefix forces Excel/Sheets to treat as text.
+  return s ? `'${s}` : "";
 }
 
 function exportDimensionsTemplate(rows: Row[]) {
@@ -64,11 +61,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   for (const r of rows) {
     lines.push(
       [
-        csvEscape(r.sku),
         csvEscapeId(r.upc),
-        csvEscapeId(r.gtin),
-        csvEscape(r.productName),
-        "",
         "",
         "",
         "",
@@ -86,6 +79,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
 
 // Minimal CSV parser supporting quoted fields, escaped quotes, and ="..." cells.
 function parseCsv(text: string): string[][] {
@@ -147,7 +141,8 @@ function parseCsv(text: string): string[][] {
 }
 
 interface ParsedDimRow {
-  sku: string;
+  sku?: string;
+  upc?: string;
   length: number | null;
   width: number | null;
   height: number | null;
@@ -159,37 +154,44 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const errors: string[] = [];
   const grid = parseCsv(text);
   if (grid.length === 0) return { rows: [], errors: ["empty file"] };
-  const header = grid[0].map((h) => h.trim().toLowerCase());
+  const header = grid[0].map((h) => h.trim().toLowerCase().replace(/^\ufeff/, ""));
   const idx = (names: string[]) =>
     header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
   const iSku = idx(["sku"]);
-  const iLen = idx(["length"]);
-  const iWid = idx(["width"]);
-  const iHei = idx(["height"]);
-  const iWgt = idx(["weight"]);
+  const iUpc = idx(["upc"]);
+  // Accept either "Length / Width / Height / Weight" OR Walmart's
+  // "DimensionD / DimensionW / DimensionH / ShippingWeight" headers.
+  const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
+  const iWid = idx(["width", "dimensionw", "dimension w"]);
+  const iHei = idx(["height", "dimensionh", "dimension h"]);
+  const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
   const iCoo = idx(["country of origin", "country_of_origin", "country"]);
-  if (iSku < 0) {
-    errors.push("missing SKU column");
+  if (iSku < 0 && iUpc < 0) {
+    errors.push("missing SKU or UPC column");
     return { rows: [], errors };
   }
   if (iLen < 0 || iWid < 0 || iHei < 0 || iWgt < 0) {
-    errors.push("missing one or more of Length / Width / Height / Weight columns");
+    errors.push("missing one or more dimension columns (need DimensionD/W/H + ShippingWeight, or Length/Width/Height/Weight)");
     return { rows: [], errors };
   }
   const num = (s: string | undefined): number | null => {
     if (s == null) return null;
-    const t = s.replace(/[",=]/g, "").trim();
+    const t = s.replace(/[",=']/g, "").trim();
     if (!t) return null;
     const n = Number(t);
     return Number.isFinite(n) && n > 0 ? n : null;
   };
+  const clean = (s: string | undefined): string =>
+    (s ?? "").replace(/[",=]/g, "").replace(/^'/, "").trim();
   const rows: ParsedDimRow[] = [];
   for (let r = 1; r < grid.length; r++) {
     const cells = grid[r];
-    const sku = (cells[iSku] ?? "").replace(/[",=]/g, "").trim();
-    if (!sku) continue;
+    const sku = iSku >= 0 ? clean(cells[iSku]) : "";
+    const upc = iUpc >= 0 ? clean(cells[iUpc]) : "";
+    if (!sku && !upc) continue;
     rows.push({
-      sku,
+      sku: sku || undefined,
+      upc: upc || undefined,
       length: num(cells[iLen]),
       width: num(cells[iWid]),
       height: num(cells[iHei]),
@@ -199,6 +201,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   }
   return { rows, errors };
 }
+
 
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "warn" | "bad" }) {
@@ -362,13 +365,52 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     setImportResult(null);
     try {
       const text = await file.text();
-      const { rows, errors } = parseDimensionsCsv(text);
+      const { rows: parsed, errors } = parseDimensionsCsv(text);
       if (errors.length > 0) throw new Error(errors.join("; "));
-      if (rows.length === 0) throw new Error("no data rows found");
-      const res = await importDimensions({ data: { rows } });
+      if (parsed.length === 0) throw new Error("no data rows found");
+
+      // Build UPC -> SKU(s) lookup from current catalog so a UPC-keyed import
+      // file (Walmart's "UPC,DimensionD,DimensionW,DimensionH,ShippingWeight"
+      // export format) can be applied to every matching SKU.
+      const upcToSkus = new Map<string, string[]>();
+      for (const it of items) {
+        const u = (it.upc ?? "").replace(/[^0-9]/g, "");
+        if (!u) continue;
+        const arr = upcToSkus.get(u) ?? [];
+        arr.push(it.sku);
+        upcToSkus.set(u, arr);
+      }
+
+      const resolved: Array<{
+        sku: string;
+        length: number | null;
+        width: number | null;
+        height: number | null;
+        weight: number | null;
+        countryOfOrigin?: string;
+      }> = [];
+      let unresolved = 0;
+      for (const r of parsed) {
+        if (r.sku) {
+          resolved.push({ sku: r.sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
+          continue;
+        }
+        const u = (r.upc ?? "").replace(/[^0-9]/g, "");
+        const skus = upcToSkus.get(u);
+        if (!skus || skus.length === 0) {
+          unresolved++;
+          continue;
+        }
+        for (const sku of skus) {
+          resolved.push({ sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
+        }
+      }
+      if (resolved.length === 0) throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
+
+      const res = await importDimensions({ data: { rows: resolved } });
       setImportResult(res);
       toast.success(
-        `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors`
+        `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
       );
       void refreshOverview();
     } catch (e) {
@@ -379,6 +421,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       if (dimFileRef.current) dimFileRef.current.value = "";
     }
   }
+
 
 
 
