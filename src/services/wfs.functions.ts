@@ -2132,7 +2132,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         sku_count: mpItems.length,
         skus: mpItems.map((i) => i.sku),
         status: mpItems.length === 0 ? "no_dimensions" : "submitting",
-        response: { preflightFailed },
+        response: { preflightFailed: preflightFailed as unknown as Record<string, unknown>[] } as any,
       })
       .select("id")
       .single();
