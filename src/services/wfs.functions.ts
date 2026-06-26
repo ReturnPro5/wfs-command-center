@@ -2217,9 +2217,14 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       if (!(width > 0)) missing.push("width");
       if (!(height > 0)) missing.push("height");
       if (!(weight > 0)) missing.push("weight");
-      if (!(r.brand ?? "").trim()) missing.push("brand");
-      if (!(r.manufacturer ?? "").trim()) missing.push("manufacturer");
+      const brand = (r.brand ?? "").trim();
+      // Manufacturer defaults to Brand when not separately provided —
+      // Walmart accepts that and most sellers carry the same value.
+      const manufacturer = (r.manufacturer ?? "").trim() || brand;
+      if (!brand) missing.push("brand");
+      if (!manufacturer) missing.push("manufacturer");
       if (!(r.main_image_url ?? "").trim()) missing.push("mainImageUrl");
+
       if (!(r.country_of_origin ?? "").trim()) missing.push("countryOfOrigin");
       if (!(r.product_type ?? "").trim()) missing.push("productType");
       if (r.price == null) missing.push("price");
