@@ -2889,7 +2889,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
       .parse(data ?? {})
   )
   .handler(async ({ data }): Promise<EnrichCatalogResult> => {
-    const batchSize = data.batchSize ?? 25;
+    const batchSize = data.batchSize ?? 200;
     await getWalmartAccessToken();
 
     let query = supabaseAdmin
