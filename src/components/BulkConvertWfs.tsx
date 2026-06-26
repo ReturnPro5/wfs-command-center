@@ -374,30 +374,46 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         <section className="space-y-2 rounded-md border border-border bg-secondary/30 p-3 text-sm">
           <div className="flex flex-wrap gap-x-6 gap-y-1">
             <span><strong>Feed ID:</strong> <span className="font-mono">{result.feedId ?? "—"}</span></span>
-            <span><strong>Status:</strong> {result.status}</span>
+            <span><strong>Status:</strong> {result.status}{result.timedOut ? " (poll timed out — recheck later)" : ""}</span>
             <span><strong>Submitted:</strong> {result.submittedCount.toLocaleString()}</span>
             {result.itemsReceived !== null && <span>Received: {result.itemsReceived}</span>}
-            {result.itemsSucceeded !== null && <span>Succeeded: {result.itemsSucceeded}</span>}
-            {result.itemsFailed !== null && <span>Failed: {result.itemsFailed}</span>}
+            <span className="text-status-healthy">Succeeded: {result.successSkus.length.toLocaleString()}</span>
+            <span className="text-status-critical">Failed: {result.failedItems.length.toLocaleString()}</span>
           </div>
-          {result.ingestionErrors.length > 0 && (
-            <div className="mt-2">
-              <p className="font-medium text-status-warning">Per-SKU errors ({result.ingestionErrors.length})</p>
+
+          {result.successSkus.length > 0 && (
+            <details className="mt-2" open>
+              <summary className="cursor-pointer font-medium text-status-healthy">
+                Ready for WFS ({result.successSkus.length})
+              </summary>
+              <ul className="mt-1 max-h-48 overflow-y-auto space-y-0.5 text-xs font-mono">
+                {result.successSkus.slice(0, 500).map((sku) => (
+                  <li key={sku} className="text-status-healthy">{sku}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {result.failedItems.length > 0 && (
+            <details className="mt-2" open>
+              <summary className="cursor-pointer font-medium text-status-critical">
+                Failed / hazmat hold ({result.failedItems.length})
+              </summary>
               <ul className="mt-1 max-h-60 overflow-y-auto space-y-1 text-xs">
-                {result.ingestionErrors.slice(0, 200).map((e, i) => (
-                  <li key={i} className="font-mono">
-                    <span className="text-primary">{e.sku ?? "?"}</span>{" "}
-                    <span className="text-status-warning">[{e.type ?? "error"}]</span>{" "}
-                    <span className="text-muted-foreground">{e.description ?? ""}</span>
+                {result.failedItems.slice(0, 500).map((f) => (
+                  <li key={f.sku} className="font-mono">
+                    <span className="text-primary">{f.sku}</span>{" "}
+                    <span className="text-status-warning">[{f.status}]</span>{" "}
+                    <span className="text-muted-foreground">{f.reason}</span>
                   </li>
                 ))}
               </ul>
-            </div>
+            </details>
           )}
-          {result.ingestionErrors.length === 0 && (
+
+          {result.successSkus.length === 0 && result.failedItems.length === 0 && (
             <p className="text-xs text-muted-foreground">
-              No per-SKU errors returned yet. Walmart may still be processing — recheck the feed status in Seller Center
-              or via the feed ID.
+              No per-SKU outcomes yet — Walmart may still be processing. Recheck the feed status by feed ID in a few minutes.
             </p>
           )}
         </section>
