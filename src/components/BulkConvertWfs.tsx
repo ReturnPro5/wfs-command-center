@@ -61,7 +61,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   for (const r of rows) {
     lines.push(
       [
-        csvEscape(csvEscapeId(r.upc)),
+        csvEscapeId(r.upc),
         "",
         "",
         "",
