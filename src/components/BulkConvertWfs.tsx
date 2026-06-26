@@ -141,7 +141,8 @@ function parseCsv(text: string): string[][] {
 }
 
 interface ParsedDimRow {
-  sku: string;
+  sku?: string;
+  upc?: string;
   length: number | null;
   width: number | null;
   height: number | null;
@@ -153,37 +154,44 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const errors: string[] = [];
   const grid = parseCsv(text);
   if (grid.length === 0) return { rows: [], errors: ["empty file"] };
-  const header = grid[0].map((h) => h.trim().toLowerCase());
+  const header = grid[0].map((h) => h.trim().toLowerCase().replace(/^\ufeff/, ""));
   const idx = (names: string[]) =>
     header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
   const iSku = idx(["sku"]);
-  const iLen = idx(["length"]);
-  const iWid = idx(["width"]);
-  const iHei = idx(["height"]);
-  const iWgt = idx(["weight"]);
+  const iUpc = idx(["upc"]);
+  // Accept either "Length / Width / Height / Weight" OR Walmart's
+  // "DimensionD / DimensionW / DimensionH / ShippingWeight" headers.
+  const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
+  const iWid = idx(["width", "dimensionw", "dimension w"]);
+  const iHei = idx(["height", "dimensionh", "dimension h"]);
+  const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
   const iCoo = idx(["country of origin", "country_of_origin", "country"]);
-  if (iSku < 0) {
-    errors.push("missing SKU column");
+  if (iSku < 0 && iUpc < 0) {
+    errors.push("missing SKU or UPC column");
     return { rows: [], errors };
   }
   if (iLen < 0 || iWid < 0 || iHei < 0 || iWgt < 0) {
-    errors.push("missing one or more of Length / Width / Height / Weight columns");
+    errors.push("missing one or more dimension columns (need DimensionD/W/H + ShippingWeight, or Length/Width/Height/Weight)");
     return { rows: [], errors };
   }
   const num = (s: string | undefined): number | null => {
     if (s == null) return null;
-    const t = s.replace(/[",=]/g, "").trim();
+    const t = s.replace(/[",=']/g, "").trim();
     if (!t) return null;
     const n = Number(t);
     return Number.isFinite(n) && n > 0 ? n : null;
   };
+  const clean = (s: string | undefined): string =>
+    (s ?? "").replace(/[",=]/g, "").replace(/^'/, "").trim();
   const rows: ParsedDimRow[] = [];
   for (let r = 1; r < grid.length; r++) {
     const cells = grid[r];
-    const sku = (cells[iSku] ?? "").replace(/[",=]/g, "").trim();
-    if (!sku) continue;
+    const sku = iSku >= 0 ? clean(cells[iSku]) : "";
+    const upc = iUpc >= 0 ? clean(cells[iUpc]) : "";
+    if (!sku && !upc) continue;
     rows.push({
-      sku,
+      sku: sku || undefined,
+      upc: upc || undefined,
       length: num(cells[iLen]),
       width: num(cells[iWid]),
       height: num(cells[iHei]),
@@ -193,6 +201,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   }
   return { rows, errors };
 }
+
 
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "warn" | "bad" }) {
