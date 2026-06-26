@@ -2324,7 +2324,7 @@ export const importDimensions = createServerFn({ method: "POST" })
     let updated = 0;
     let skipped = 0;
 
-    for (const row of data.rows) {
+    const tasks = data.rows.map((row) => async () => {
       const hasAll =
         (row.length ?? 0) > 0 &&
         (row.width ?? 0) > 0 &&
@@ -2336,7 +2336,7 @@ export const importDimensions = createServerFn({ method: "POST" })
           sku: row.sku,
           reason: "missing one or more of length/width/height/weight",
         });
-        continue;
+        return;
       }
       const patch: Record<string, unknown> = {
         shipping_length: row.length,
@@ -2357,15 +2357,28 @@ export const importDimensions = createServerFn({ method: "POST" })
         .eq("sku", row.sku);
       if (error) {
         errors.push({ sku: row.sku, reason: error.message });
-        continue;
+        return;
       }
       if ((count ?? 0) === 0) {
         skipped++;
         errors.push({ sku: row.sku, reason: "SKU not found in catalog" });
-        continue;
+        return;
       }
       updated++;
-    }
+    });
+
+    // Run updates with a concurrency pool so a batch finishes in roughly
+    // wall = (rows / CONCURRENCY) * per-row latency, instead of sequentially.
+    const CONCURRENCY = 25;
+    let cursor = 0;
+    await Promise.all(
+      Array.from({ length: CONCURRENCY }, async () => {
+        while (cursor < tasks.length) {
+          const idx = cursor++;
+          await tasks[idx]();
+        }
+      })
+    );
 
     return { received: data.rows.length, updated, skipped, errors };
   });
