@@ -1203,7 +1203,8 @@ async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
 }
 
 const FULFILLMENT_REPORT_CACHE_TTL_MS = 2 * 60 * 1000;
-let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, FulfillmentType>> } | null = null;
+let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, ItemReportRow>> } | null = null;
+
 let fulfillmentReportRequest: { ts: number; requestId: string } | null = null;
 
 function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
