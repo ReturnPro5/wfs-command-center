@@ -1611,12 +1611,17 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, enrichment_status, enriched_at")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, product_type, enrichment_status, enriched_at")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
       if (!data || data.length === 0) break;
       for (const r of data as any[]) {
+        // Walmart's items API rarely returns `category` for seller-fulfilled
+        // SKUs but does populate `productType` — fall back so the category
+        // filter actually buckets items instead of collapsing everything to
+        // "Uncategorized".
+        const cat = (r.category && String(r.category).trim()) || (r.product_type && String(r.product_type).trim()) || "";
         items.push({
           sku: r.sku,
           productName: r.product_name ?? "",
@@ -1626,7 +1631,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           condition: r.condition ?? "",
           publishedStatus: r.published_status ?? "",
           fulfillment: r.fulfillment ?? "Unknown",
-          category: r.category ?? "",
+          category: cat,
           enrichmentStatus: r.enrichment_status ?? "pending",
           enrichedAt: r.enriched_at ?? null,
         });
