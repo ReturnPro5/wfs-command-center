@@ -2384,6 +2384,12 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               sku: r.sku,
               orderableGTIN: gtin,
               countryOfOriginAssembly: [String(r.country_of_origin).trim()],
+              tradeItemConfiguration: {
+                packLevel: "Each",
+                isOrderableUnit: "Yes",
+                isConsumerUnit: "Yes",
+                isInnerPack: "Yes",
+              },
               innerPack: {
                 innerPackGTIN: gtin,
                 qtySellableItemsInnerPack: 1,
@@ -2393,6 +2399,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
                 innerPackWeight: weight,
               },
             },
+
           };
         });
 
