@@ -603,7 +603,12 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
               disabled={importing}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
             >
-              {importing ? "Importing…" : "Import dimensions CSV"}
+              {importing
+                ? importProgress
+                  ? `Importing… ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()}`
+                  : "Importing…"
+                : "Import dimensions CSV"}
+
             </button>
           </div>
         </div>
