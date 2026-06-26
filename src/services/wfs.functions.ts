@@ -2791,6 +2791,45 @@ export const importDimensions = createServerFn({ method: "POST" })
     let updated = 0;
     let skipped = 0;
 
+    const existingBySku = new Map<string, any>();
+    const uniqueSkus = Array.from(new Set(data.rows.map((row) => row.sku)));
+    for (let i = 0; i < uniqueSkus.length; i += 1000) {
+      const { data: existing, error: existingErr } = await supabaseAdmin
+        .from("catalog_items")
+        .select("sku, brand, manufacturer, main_image_url, price, product_type, country_of_origin, shipping_weight, shipping_length, shipping_width, shipping_height")
+        .in("sku", uniqueSkus.slice(i, i + 1000));
+      if (existingErr) throw new Error(`catalog lookup failed: ${existingErr.message}`);
+      for (const row of existing ?? []) existingBySku.set((row as any).sku, row);
+    }
+
+    const finalValue = (patch: Record<string, unknown>, current: any, key: string) =>
+      patch[key] !== undefined ? patch[key] : current?.[key];
+
+    const isReadyAfterPatch = (patch: Record<string, unknown>, current: any): boolean => {
+      const brand = String(finalValue(patch, current, "brand") ?? "").trim();
+      const manufacturer = String(finalValue(patch, current, "manufacturer") ?? "").trim() || brand;
+      const image = String(finalValue(patch, current, "main_image_url") ?? "").trim();
+      const country = String(finalValue(patch, current, "country_of_origin") ?? "").trim();
+      const productType = String(finalValue(patch, current, "product_type") ?? "").trim();
+      const price = Number(finalValue(patch, current, "price") ?? 0);
+      const weight = Number(finalValue(patch, current, "shipping_weight") ?? 0);
+      const length = Number(finalValue(patch, current, "shipping_length") ?? 0);
+      const width = Number(finalValue(patch, current, "shipping_width") ?? 0);
+      const height = Number(finalValue(patch, current, "shipping_height") ?? 0);
+      return Boolean(
+        brand &&
+          manufacturer &&
+          image &&
+          country &&
+          productType &&
+          price > 0 &&
+          weight > 0 &&
+          length > 0 &&
+          width > 0 &&
+          height > 0
+      );
+    };
+
     const tasks = data.rows.map((row) => async () => {
       const patch: Record<string, unknown> = {};
       // Dims are optional now — we accept partial enrichment rows. The
@@ -2814,15 +2853,7 @@ export const importDimensions = createServerFn({ method: "POST" })
         return;
       }
       patch.enriched_at = new Date().toISOString();
-      // Status flips to "enriched" only when dims are all set; otherwise
-      // leave whatever status was there so the submit preflight can still
-      // catch missing fields downstream.
-      const hasAllDims =
-        (row.length ?? 0) > 0 &&
-        (row.width ?? 0) > 0 &&
-        (row.height ?? 0) > 0 &&
-        (row.weight ?? 0) > 0;
-      if (hasAllDims) patch.enrichment_status = "enriched";
+      patch.enrichment_status = isReadyAfterPatch(patch, existingBySku.get(row.sku)) ? "enriched" : "partial";
 
       const { error, count } = await supabaseAdmin
         .from("catalog_items")
