@@ -574,7 +574,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     try {
       while (!stopEnrichRef.current) {
         const res = await enrichCatalogStep({
-          data: { batchSize: 25, afterSku: cursor ?? undefined, reenrich },
+          data: { batchSize: 200, afterSku: cursor ?? undefined, reenrich },
         });
         totalProcessed += res.processed;
         totalEnriched += res.enriched;
