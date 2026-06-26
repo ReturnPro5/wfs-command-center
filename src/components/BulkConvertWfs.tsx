@@ -344,12 +344,6 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     }
   }
 
-  // ─── Catalog enrichment runner ────────────────────────
-  const [enrichOverview, setEnrichOverview] = useState<EnrichmentOverview | null>(null);
-  const [enriching, setEnriching] = useState(false);
-  const [enrichProgress, setEnrichProgress] = useState<string>("");
-  const stopEnrichRef = useRef(false);
-
   // ─── Dimensions import ────────────────────────────────
   const dimFileRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
@@ -368,7 +362,6 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       toast.success(
         `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors`
       );
-      void refreshOverview();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`Import failed: ${msg}`);
@@ -378,56 +371,6 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     }
   }
 
-
-
-  const refreshOverview = useCallback(async () => {
-    try {
-      const o = await getEnrichmentOverview();
-      setEnrichOverview(o);
-    } catch (e) {
-      console.warn("enrichment overview failed", e);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshOverview();
-  }, [refreshOverview]);
-
-  async function runEnrichment(reenrich: boolean) {
-    setEnriching(true);
-    stopEnrichRef.current = false;
-    let cursor: string | null = null;
-    let totalProcessed = 0;
-    let totalEnriched = 0;
-    let totalPartial = 0;
-    let totalFailed = 0;
-    try {
-      while (!stopEnrichRef.current) {
-        const res = await enrichCatalogStep({
-          data: { batchSize: 25, afterSku: cursor ?? undefined, reenrich },
-        });
-        totalProcessed += res.processed;
-        totalEnriched += res.enriched;
-        totalPartial += res.partial;
-        totalFailed += res.failed;
-        cursor = res.nextAfterSku;
-        setEnrichProgress(
-          `Processed ${totalProcessed} · enriched ${totalEnriched} · partial ${totalPartial} · errors ${totalFailed} · remaining ${res.remaining}`
-        );
-        if (res.done || res.processed === 0) break;
-      }
-      toast.success(
-        `Enrichment complete — enriched ${totalEnriched}, partial ${totalPartial}, errors ${totalFailed}`
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast.error(`Enrichment failed: ${msg}`);
-    } finally {
-      setEnriching(false);
-      stopEnrichRef.current = false;
-      void refreshOverview();
-    }
-  }
 
   return (
     <div className="space-y-4">
