@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
-  enrichCatalogStep,
-  getEnrichmentOverview,
   importDimensions,
   submitWfsConversion,
   type CatalogIdentifier,
-  type EnrichmentOverview,
   type ImportDimensionsResult,
   type WfsConversionRunResult,
 } from "@/services/wfs.functions";
+
 
 import { classifySds, type SdsClassification, type SdsRequirement } from "@/lib/sdsClassifier";
 import { SearchFilter } from "@/components/SearchFilter";
