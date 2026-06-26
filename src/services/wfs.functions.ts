@@ -1120,9 +1120,30 @@ export interface CatalogIdentifier {
   publishedStatus?: string;
   fulfillment?: FulfillmentType | string;
   category?: string;
+  brand?: string;
+  mainImageUrl?: string;
+  price?: number | null;
+  productType?: string;
   enrichmentStatus?: "pending" | "partial" | "enriched" | "error" | string;
   enrichedAt?: string | null;
 }
+
+// Rich row extracted from Walmart Item Report v4. The report has Brand,
+// Product Image URL, Price, and Product Type alongside the fulfillment
+// label, so we capture them here and merge them into catalog_items during
+// sync — the user only needs to supply dimensions + country of origin.
+export interface ItemReportRow {
+  fulfillment: FulfillmentType | null;
+  brand?: string;
+  mainImageUrl?: string;
+  price?: number | null;
+  currency?: string;
+  productType?: string;
+  productName?: string;
+  gtin?: string;
+  upc?: string;
+}
+
 
 
 // Derive fulfillment label from Walmart data.
@@ -1133,11 +1154,12 @@ export interface CatalogIdentifier {
 function deriveFulfillment(
   it: any,
   wfsSkuSet?: Set<string>,
-  itemReportFulfillment?: Map<string, FulfillmentType>
+  itemReportRows?: Map<string, ItemReportRow>
 ): FulfillmentType {
   const sku = String(it?.sku ?? it?.SKU ?? it?.mart_sku ?? "");
-  const reported = sku ? itemReportFulfillment?.get(sku) : undefined;
+  const reported = sku ? itemReportRows?.get(sku)?.fulfillment : undefined;
   if (reported) return reported;
+
 
   const ship = String(
     it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
@@ -1181,7 +1203,8 @@ async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
 }
 
 const FULFILLMENT_REPORT_CACHE_TTL_MS = 2 * 60 * 1000;
-let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, FulfillmentType>> } | null = null;
+let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, ItemReportRow>> } | null = null;
+
 let fulfillmentReportRequest: { ts: number; requestId: string } | null = null;
 
 function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
@@ -1266,33 +1289,90 @@ function detectDelimiter(text: string): string {
   return ",";
 }
 
-function parseFulfillmentReport(csv: string): Map<string, FulfillmentType> {
+// Column-name lookups for Walmart's Item Report v4. Headers are normalized
+// to lowercase alphanumeric, so "Product Image URL" → "productimageurl".
+const COL_ALIASES = {
+  sku: ["sku", "sellersku", "merchantsku"],
+  fulfillment: [
+    "fulfillmenttype", "fulfillment", "wfsstatus", "wfseligibility", "shippingprogramtype",
+  ],
+  brand: ["brand", "brandname"],
+  image: ["productimageurl", "primaryimageurl", "imageurl", "mainimageurl", "productimage"],
+  price: ["price", "listprice", "yourprice", "currentprice"],
+  currency: ["currency", "currencycode"],
+  productType: ["producttype", "productcategory", "primarycategory"],
+  productName: ["productname", "itemname", "title"],
+  gtin: ["gtin"],
+  upc: ["upc", "productid"],
+} as const;
+
+function findCol(header: string[], aliases: readonly string[]): number {
+  for (const a of aliases) {
+    const i = header.indexOf(a);
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+function buildReportRow(
+  row: string[],
+  idx: Record<keyof typeof COL_ALIASES, number>,
+): { sku: string; data: ItemReportRow } | null {
+  const sku = row[idx.sku]?.trim();
+  if (!sku) return null;
+  const priceRaw = idx.price >= 0 ? row[idx.price]?.replace(/[^0-9.\-]/g, "") : "";
+  const price = priceRaw ? Number(priceRaw) : null;
+  const data: ItemReportRow = {
+    fulfillment: idx.fulfillment >= 0 ? normalizeFulfillmentType(row[idx.fulfillment]) : null,
+    brand: idx.brand >= 0 ? row[idx.brand]?.trim() || undefined : undefined,
+    mainImageUrl: idx.image >= 0 ? row[idx.image]?.trim() || undefined : undefined,
+    price: Number.isFinite(price as number) ? (price as number) : null,
+    currency: idx.currency >= 0 ? row[idx.currency]?.trim() || undefined : undefined,
+    productType: idx.productType >= 0 ? row[idx.productType]?.trim() || undefined : undefined,
+    productName: idx.productName >= 0 ? row[idx.productName]?.trim() || undefined : undefined,
+    gtin: idx.gtin >= 0 ? row[idx.gtin]?.trim() || undefined : undefined,
+    upc: idx.upc >= 0 ? row[idx.upc]?.replace(/[^0-9]/g, "") || undefined : undefined,
+  };
+  return { sku, data };
+}
+
+function indexHeader(header: string[]): Record<keyof typeof COL_ALIASES, number> {
+  return {
+    sku: findCol(header, COL_ALIASES.sku),
+    fulfillment: findCol(header, COL_ALIASES.fulfillment),
+    brand: findCol(header, COL_ALIASES.brand),
+    image: findCol(header, COL_ALIASES.image),
+    price: findCol(header, COL_ALIASES.price),
+    currency: findCol(header, COL_ALIASES.currency),
+    productType: findCol(header, COL_ALIASES.productType),
+    productName: findCol(header, COL_ALIASES.productName),
+    gtin: findCol(header, COL_ALIASES.gtin),
+    upc: findCol(header, COL_ALIASES.upc),
+  };
+}
+
+function parseFulfillmentReport(csv: string): Map<string, ItemReportRow> {
   const delimiter = detectDelimiter(csv);
   const rows = parseCsv(csv, delimiter);
   const header = rows[0]?.map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "")) ?? [];
-  const skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku" || h === "merchantsku");
-  const fulfillmentIdx = header.findIndex(
-    (h) => h === "fulfillmenttype" || h === "fulfillment" || h === "wfsstatus" || h === "wfseligibility" || h === "shippingprogramtype",
-  );
-  const map = new Map<string, FulfillmentType>();
-  if (skuIdx < 0 || fulfillmentIdx < 0) {
-    console.warn(`[WFS:catalog] item report header missing sku/fulfillment columns. header=${header.slice(0, 30).join("|")}`);
+  const idx = indexHeader(header);
+  const map = new Map<string, ItemReportRow>();
+  if (idx.sku < 0) {
+    console.warn(`[WFS:catalog] item report header missing sku column. header=${header.slice(0, 30).join("|")}`);
     return map;
   }
   for (const row of rows.slice(1)) {
-    const sku = row[skuIdx]?.trim();
-    const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
-    if (sku && fulfillment) map.set(sku, fulfillment);
+    const entry = buildReportRow(row, idx);
+    if (entry) map.set(entry.sku, entry.data);
   }
   return map;
 }
 
 function createFulfillmentReportParser() {
-  const map = new Map<string, FulfillmentType>();
+  const map = new Map<string, ItemReportRow>();
   let buffer = "";
   let delimiter = ",";
-  let skuIdx = -1;
-  let fulfillmentIdx = -1;
+  let idx: Record<keyof typeof COL_ALIASES, number> | null = null;
   let headerParsed = false;
 
   function ingestLine(rawLine: string) {
@@ -1301,21 +1381,19 @@ function createFulfillmentReportParser() {
     if (!headerParsed) {
       delimiter = detectDelimiter(line);
       const header = parseCsvLine(line, delimiter).map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ""));
-      skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku" || h === "merchantsku");
-      fulfillmentIdx = header.findIndex(
-        (h) => h === "fulfillmenttype" || h === "fulfillment" || h === "wfsstatus" || h === "wfseligibility" || h === "shippingprogramtype",
-      );
+      idx = indexHeader(header);
       headerParsed = true;
-      if (skuIdx < 0 || fulfillmentIdx < 0) {
-        console.warn(`[WFS:catalog] item report header missing sku/fulfillment columns. header=${header.slice(0, 30).join("|")}`);
+      if (idx.sku < 0) {
+        console.warn(`[WFS:catalog] item report header missing sku column. header=${header.slice(0, 30).join("|")}`);
+      } else {
+        console.log(`[WFS:catalog] item report cols sku=${idx.sku} fulfillment=${idx.fulfillment} brand=${idx.brand} image=${idx.image} price=${idx.price} productType=${idx.productType}`);
       }
       return;
     }
-    if (skuIdx < 0 || fulfillmentIdx < 0) return;
+    if (!idx || idx.sku < 0) return;
     const row = parseCsvLine(line, delimiter);
-    const sku = row[skuIdx]?.trim();
-    const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
-    if (sku && fulfillment) map.set(sku, fulfillment);
+    const entry = buildReportRow(row, idx);
+    if (entry) map.set(entry.sku, entry.data);
   }
 
   return {
@@ -1331,7 +1409,7 @@ function createFulfillmentReportParser() {
   };
 }
 
-async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string): Promise<Map<string, FulfillmentType>> {
+async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string): Promise<Map<string, ItemReportRow>> {
   const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
   if (!isZip) {
     return parseFulfillmentReport(new TextDecoder().decode(bytes));
@@ -1366,6 +1444,7 @@ async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string
 }
 
 
+
 function getReportRequestId(payload: any): string | null {
   return String(
     payload?.requestId ??
@@ -1397,12 +1476,12 @@ function getReadyReportRequestId(payload: any): string | null {
   return null;
 }
 
-async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentType>> {
+async function getItemReportFulfillmentMap(): Promise<Map<string, ItemReportRow>> {
   if (fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
     return fulfillmentReportCache.promise;
   }
 
-  const promise = (async () => {
+  const promise = (async (): Promise<Map<string, ItemReportRow>> => {
     try {
       if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
         let requestId: string | null = null;
@@ -1435,13 +1514,15 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
 
       const downloaded = await walmartApi.downloadReportFile(requestId);
       const map = await parseFulfillmentReportFile(downloaded.bytes, downloaded.contentType);
-      if (map.size === 0) throw new Error("item report did not include fulfillment rows");
-      console.log(`[WFS:catalog] item report fulfillment rows=${map.size}`);
+      if (map.size === 0) throw new Error("item report did not include any rows");
+      const withBrand = Array.from(map.values()).filter((r) => r.brand).length;
+      const withImage = Array.from(map.values()).filter((r) => r.mainImageUrl).length;
+      console.log(`[WFS:catalog] item report rows=${map.size} brand=${withBrand} image=${withImage}`);
       fulfillmentReportRequest = null;
       return map;
     } catch (err) {
-      console.warn("[WFS:catalog] item report fulfillment unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
-      return new Map<string, FulfillmentType>();
+      console.warn("[WFS:catalog] item report unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
+      return new Map<string, ItemReportRow>();
     }
   })();
 
@@ -1449,6 +1530,7 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
   promise.catch(() => { fulfillmentReportCache = null; });
   return promise;
 }
+
 
 export interface CatalogPage {
   items: CatalogIdentifier[];
@@ -1534,21 +1616,31 @@ export const getCatalogPage = createServerFn({ method: "POST" })
     }
 
     const items: CatalogIdentifier[] = list
-      .map((it: any) => ({
-        sku: String(it.sku ?? it.SKU ?? it.mart_sku ?? ""),
-        productName: String(it.productName ?? it.product_name ?? it.name ?? ""),
-        gtin: String(it.gtin ?? it.GTIN ?? ""),
-        upc: String(
-          it.upc ??
-            it.UPC ??
-            it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
-            ""
-        ),
-        condition: String(it.condition ?? it.itemCondition ?? "New"),
-        publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
-        fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
-      }))
+      .map((it: any) => {
+        const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
+        const report = sku ? itemReportFulfillment.get(sku) : undefined;
+        return {
+          sku,
+          productName: String(it.productName ?? it.product_name ?? it.name ?? report?.productName ?? ""),
+          gtin: String(it.gtin ?? it.GTIN ?? report?.gtin ?? ""),
+          upc: String(
+            it.upc ??
+              it.UPC ??
+              it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
+              report?.upc ??
+              ""
+          ),
+          condition: String(it.condition ?? it.itemCondition ?? "New"),
+          publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
+          fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
+          brand: report?.brand,
+          mainImageUrl: report?.mainImageUrl,
+          price: report?.price ?? null,
+          productType: report?.productType,
+        };
+      })
       .filter((i) => i.sku);
+
 
     const totalCount: number | null =
       page?.totalItems ??
@@ -1724,19 +1816,29 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
       added = skus.filter((s) => !existingSet.has(s)).length;
       updated = skus.length - added;
 
-      const rows = page.items.map((it) => ({
-        sku: it.sku,
-        product_name: it.productName,
-        gtin: it.gtin,
-        upc: it.upc,
-        lifecycle: page.lifecycle,
-        condition: it.condition ?? "New",
-        published_status: it.publishedStatus ?? publishedStatus,
-        fulfillment: it.fulfillment ?? "Unknown",
-        category: it.category ?? "",
-        last_seen_at: now,
-        last_synced_at: now,
-      }));
+      const rows = page.items.map((it) => {
+        const row: any = {
+          sku: it.sku,
+          product_name: it.productName,
+          gtin: it.gtin,
+          upc: it.upc,
+          lifecycle: page.lifecycle,
+          condition: it.condition ?? "New",
+          published_status: it.publishedStatus ?? publishedStatus,
+          fulfillment: it.fulfillment ?? "Unknown",
+          category: it.category ?? it.productType ?? "",
+          last_seen_at: now,
+          last_synced_at: now,
+        };
+        // Fields auto-populated from the Walmart Item Report v4. Only write
+        // when present so we don't blank out manually-imported values.
+        if (it.brand) row.brand = it.brand;
+        if (it.mainImageUrl) row.main_image_url = it.mainImageUrl;
+        if (typeof it.price === "number" && Number.isFinite(it.price)) row.price = it.price;
+        if (it.productType) row.product_type = it.productType;
+        return row;
+      });
+
       const CHUNK = 500;
       for (let i = 0; i < rows.length; i += CHUNK) {
         const slice = rows.slice(i, i + CHUNK);
@@ -2086,7 +2188,10 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       weight: number;
       isHazmat: boolean;
       gtin: string;
+      brand: string;
+      manufacturer: string;
     };
+
     const ready: Ready[] = [];
 
     const slug = (s: string) =>
@@ -2115,9 +2220,14 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       if (!(width > 0)) missing.push("width");
       if (!(height > 0)) missing.push("height");
       if (!(weight > 0)) missing.push("weight");
-      if (!(r.brand ?? "").trim()) missing.push("brand");
-      if (!(r.manufacturer ?? "").trim()) missing.push("manufacturer");
+      const brand = (r.brand ?? "").trim();
+      // Manufacturer defaults to Brand when not separately provided —
+      // Walmart accepts that and most sellers carry the same value.
+      const manufacturer = (r.manufacturer ?? "").trim() || brand;
+      if (!brand) missing.push("brand");
+      if (!manufacturer) missing.push("manufacturer");
       if (!(r.main_image_url ?? "").trim()) missing.push("mainImageUrl");
+
       if (!(r.country_of_origin ?? "").trim()) missing.push("countryOfOrigin");
       if (!(r.product_type ?? "").trim()) missing.push("productType");
       if (r.price == null) missing.push("price");
@@ -2146,7 +2256,10 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         weight,
         isHazmat,
         gtin,
+        brand,
+        manufacturer,
       });
+
     }
 
     // Group ready items by subCategory — Walmart accepts only ONE
@@ -2231,18 +2344,19 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     try {
       for (const [subCategory, items] of groups) {
         const supplierItems = items.map((it) => {
-          const { r, gtin, isHazmat, length, width, height, weight } = it;
+          const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
           return {
             Visible: {
               [it.visibleKey]: {
-                manufacturer: String(r.manufacturer).trim(),
+                manufacturer,
                 mainImageUrl: String(r.main_image_url).trim(),
               },
             },
             Orderable: {
               sku: r.sku,
               productName: String(r.product_name).trim(),
-              brand: String(r.brand).trim(),
+              brand,
+
               productIdentifiers: {
                 productId: gtin,
                 productIdType: gtin.length === 12 ? "UPC" : "GTIN",
