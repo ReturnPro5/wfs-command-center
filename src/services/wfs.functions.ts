@@ -1289,33 +1289,90 @@ function detectDelimiter(text: string): string {
   return ",";
 }
 
-function parseFulfillmentReport(csv: string): Map<string, FulfillmentType> {
+// Column-name lookups for Walmart's Item Report v4. Headers are normalized
+// to lowercase alphanumeric, so "Product Image URL" → "productimageurl".
+const COL_ALIASES = {
+  sku: ["sku", "sellersku", "merchantsku"],
+  fulfillment: [
+    "fulfillmenttype", "fulfillment", "wfsstatus", "wfseligibility", "shippingprogramtype",
+  ],
+  brand: ["brand", "brandname"],
+  image: ["productimageurl", "primaryimageurl", "imageurl", "mainimageurl", "productimage"],
+  price: ["price", "listprice", "yourprice", "currentprice"],
+  currency: ["currency", "currencycode"],
+  productType: ["producttype", "productcategory", "primarycategory"],
+  productName: ["productname", "itemname", "title"],
+  gtin: ["gtin"],
+  upc: ["upc", "productid"],
+} as const;
+
+function findCol(header: string[], aliases: readonly string[]): number {
+  for (const a of aliases) {
+    const i = header.indexOf(a);
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+function buildReportRow(
+  row: string[],
+  idx: Record<keyof typeof COL_ALIASES, number>,
+): { sku: string; data: ItemReportRow } | null {
+  const sku = row[idx.sku]?.trim();
+  if (!sku) return null;
+  const priceRaw = idx.price >= 0 ? row[idx.price]?.replace(/[^0-9.\-]/g, "") : "";
+  const price = priceRaw ? Number(priceRaw) : null;
+  const data: ItemReportRow = {
+    fulfillment: idx.fulfillment >= 0 ? normalizeFulfillmentType(row[idx.fulfillment]) : null,
+    brand: idx.brand >= 0 ? row[idx.brand]?.trim() || undefined : undefined,
+    mainImageUrl: idx.image >= 0 ? row[idx.image]?.trim() || undefined : undefined,
+    price: Number.isFinite(price as number) ? (price as number) : null,
+    currency: idx.currency >= 0 ? row[idx.currency]?.trim() || undefined : undefined,
+    productType: idx.productType >= 0 ? row[idx.productType]?.trim() || undefined : undefined,
+    productName: idx.productName >= 0 ? row[idx.productName]?.trim() || undefined : undefined,
+    gtin: idx.gtin >= 0 ? row[idx.gtin]?.trim() || undefined : undefined,
+    upc: idx.upc >= 0 ? row[idx.upc]?.replace(/[^0-9]/g, "") || undefined : undefined,
+  };
+  return { sku, data };
+}
+
+function indexHeader(header: string[]): Record<keyof typeof COL_ALIASES, number> {
+  return {
+    sku: findCol(header, COL_ALIASES.sku),
+    fulfillment: findCol(header, COL_ALIASES.fulfillment),
+    brand: findCol(header, COL_ALIASES.brand),
+    image: findCol(header, COL_ALIASES.image),
+    price: findCol(header, COL_ALIASES.price),
+    currency: findCol(header, COL_ALIASES.currency),
+    productType: findCol(header, COL_ALIASES.productType),
+    productName: findCol(header, COL_ALIASES.productName),
+    gtin: findCol(header, COL_ALIASES.gtin),
+    upc: findCol(header, COL_ALIASES.upc),
+  };
+}
+
+function parseFulfillmentReport(csv: string): Map<string, ItemReportRow> {
   const delimiter = detectDelimiter(csv);
   const rows = parseCsv(csv, delimiter);
   const header = rows[0]?.map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "")) ?? [];
-  const skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku" || h === "merchantsku");
-  const fulfillmentIdx = header.findIndex(
-    (h) => h === "fulfillmenttype" || h === "fulfillment" || h === "wfsstatus" || h === "wfseligibility" || h === "shippingprogramtype",
-  );
-  const map = new Map<string, FulfillmentType>();
-  if (skuIdx < 0 || fulfillmentIdx < 0) {
-    console.warn(`[WFS:catalog] item report header missing sku/fulfillment columns. header=${header.slice(0, 30).join("|")}`);
+  const idx = indexHeader(header);
+  const map = new Map<string, ItemReportRow>();
+  if (idx.sku < 0) {
+    console.warn(`[WFS:catalog] item report header missing sku column. header=${header.slice(0, 30).join("|")}`);
     return map;
   }
   for (const row of rows.slice(1)) {
-    const sku = row[skuIdx]?.trim();
-    const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
-    if (sku && fulfillment) map.set(sku, fulfillment);
+    const entry = buildReportRow(row, idx);
+    if (entry) map.set(entry.sku, entry.data);
   }
   return map;
 }
 
 function createFulfillmentReportParser() {
-  const map = new Map<string, FulfillmentType>();
+  const map = new Map<string, ItemReportRow>();
   let buffer = "";
   let delimiter = ",";
-  let skuIdx = -1;
-  let fulfillmentIdx = -1;
+  let idx: Record<keyof typeof COL_ALIASES, number> | null = null;
   let headerParsed = false;
 
   function ingestLine(rawLine: string) {
@@ -1324,21 +1381,19 @@ function createFulfillmentReportParser() {
     if (!headerParsed) {
       delimiter = detectDelimiter(line);
       const header = parseCsvLine(line, delimiter).map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ""));
-      skuIdx = header.findIndex((h) => h === "sku" || h === "sellersku" || h === "merchantsku");
-      fulfillmentIdx = header.findIndex(
-        (h) => h === "fulfillmenttype" || h === "fulfillment" || h === "wfsstatus" || h === "wfseligibility" || h === "shippingprogramtype",
-      );
+      idx = indexHeader(header);
       headerParsed = true;
-      if (skuIdx < 0 || fulfillmentIdx < 0) {
-        console.warn(`[WFS:catalog] item report header missing sku/fulfillment columns. header=${header.slice(0, 30).join("|")}`);
+      if (idx.sku < 0) {
+        console.warn(`[WFS:catalog] item report header missing sku column. header=${header.slice(0, 30).join("|")}`);
+      } else {
+        console.log(`[WFS:catalog] item report cols sku=${idx.sku} fulfillment=${idx.fulfillment} brand=${idx.brand} image=${idx.image} price=${idx.price} productType=${idx.productType}`);
       }
       return;
     }
-    if (skuIdx < 0 || fulfillmentIdx < 0) return;
+    if (!idx || idx.sku < 0) return;
     const row = parseCsvLine(line, delimiter);
-    const sku = row[skuIdx]?.trim();
-    const fulfillment = normalizeFulfillmentType(row[fulfillmentIdx]);
-    if (sku && fulfillment) map.set(sku, fulfillment);
+    const entry = buildReportRow(row, idx);
+    if (entry) map.set(entry.sku, entry.data);
   }
 
   return {
@@ -1354,7 +1409,7 @@ function createFulfillmentReportParser() {
   };
 }
 
-async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string): Promise<Map<string, FulfillmentType>> {
+async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string): Promise<Map<string, ItemReportRow>> {
   const isZip = bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
   if (!isZip) {
     return parseFulfillmentReport(new TextDecoder().decode(bytes));
@@ -1387,6 +1442,7 @@ async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string
   if (!selected) throw new Error(`report zip did not contain a text file (${contentType || "unknown content type"})`);
   return parser.map;
 }
+
 
 
 function getReportRequestId(payload: any): string | null {
