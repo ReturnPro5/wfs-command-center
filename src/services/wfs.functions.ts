@@ -1120,9 +1120,30 @@ export interface CatalogIdentifier {
   publishedStatus?: string;
   fulfillment?: FulfillmentType | string;
   category?: string;
+  brand?: string;
+  mainImageUrl?: string;
+  price?: number | null;
+  productType?: string;
   enrichmentStatus?: "pending" | "partial" | "enriched" | "error" | string;
   enrichedAt?: string | null;
 }
+
+// Rich row extracted from Walmart Item Report v4. The report has Brand,
+// Product Image URL, Price, and Product Type alongside the fulfillment
+// label, so we capture them here and merge them into catalog_items during
+// sync — the user only needs to supply dimensions + country of origin.
+export interface ItemReportRow {
+  fulfillment: FulfillmentType | null;
+  brand?: string;
+  mainImageUrl?: string;
+  price?: number | null;
+  currency?: string;
+  productType?: string;
+  productName?: string;
+  gtin?: string;
+  upc?: string;
+}
+
 
 
 // Derive fulfillment label from Walmart data.
