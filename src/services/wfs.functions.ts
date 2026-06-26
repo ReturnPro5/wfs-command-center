@@ -2355,11 +2355,12 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       for (const [subCategory, items] of groups) {
         const supplierItems = items.map((it) => {
           const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
+          const img = String(r.main_image_url ?? "").trim();
           return {
             Visible: {
               [it.visibleKey]: {
                 manufacturer,
-                mainImageUrl: String(r.main_image_url).trim(),
+                ...(img ? { mainImageUrl: img } : {}),
               },
             },
             Orderable: {
