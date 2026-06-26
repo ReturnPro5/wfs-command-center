@@ -1616,21 +1616,31 @@ export const getCatalogPage = createServerFn({ method: "POST" })
     }
 
     const items: CatalogIdentifier[] = list
-      .map((it: any) => ({
-        sku: String(it.sku ?? it.SKU ?? it.mart_sku ?? ""),
-        productName: String(it.productName ?? it.product_name ?? it.name ?? ""),
-        gtin: String(it.gtin ?? it.GTIN ?? ""),
-        upc: String(
-          it.upc ??
-            it.UPC ??
-            it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
-            ""
-        ),
-        condition: String(it.condition ?? it.itemCondition ?? "New"),
-        publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
-        fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
-      }))
+      .map((it: any) => {
+        const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
+        const report = sku ? itemReportFulfillment.get(sku) : undefined;
+        return {
+          sku,
+          productName: String(it.productName ?? it.product_name ?? it.name ?? report?.productName ?? ""),
+          gtin: String(it.gtin ?? it.GTIN ?? report?.gtin ?? ""),
+          upc: String(
+            it.upc ??
+              it.UPC ??
+              it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
+              report?.upc ??
+              ""
+          ),
+          condition: String(it.condition ?? it.itemCondition ?? "New"),
+          publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
+          fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
+          brand: report?.brand,
+          mainImageUrl: report?.mainImageUrl,
+          price: report?.price ?? null,
+          productType: report?.productType,
+        };
+      })
       .filter((i) => i.sku);
+
 
     const totalCount: number | null =
       page?.totalItems ??
