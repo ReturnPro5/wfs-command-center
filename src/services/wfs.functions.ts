@@ -1154,11 +1154,12 @@ export interface ItemReportRow {
 function deriveFulfillment(
   it: any,
   wfsSkuSet?: Set<string>,
-  itemReportFulfillment?: Map<string, FulfillmentType>
+  itemReportRows?: Map<string, ItemReportRow>
 ): FulfillmentType {
   const sku = String(it?.sku ?? it?.SKU ?? it?.mart_sku ?? "");
-  const reported = sku ? itemReportFulfillment?.get(sku) : undefined;
+  const reported = sku ? itemReportRows?.get(sku)?.fulfillment : undefined;
   if (reported) return reported;
+
 
   const ship = String(
     it?.shippingProgramType ?? it?.shipping_program_type ?? it?.fulfillmentProgramType ?? ""
