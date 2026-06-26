@@ -2065,27 +2065,56 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     // Hazmat flag is derived from the product name via our SDS classifier:
     // Likely-required items are sent as hazardous so Walmart routes them to
     // compliance review instead of silently failing later.
-    const mpItems = data.skus
-      .map((sku) => bySku.get(sku))
-      .filter(Boolean)
-      .map((r: any) => {
-        const sds = classifySds(r.product_name);
-        const isHazmat = sds.requirement === "Likely required";
-        const gtin = (r.gtin || r.upc || "").trim();
-        return {
+    //
+    // Preflight: any SKU missing shipping dimensions or weight is dropped
+    // from the feed and reported as a failed item with reason "No dimensions
+    // on file" so the operator can fill them via Import dimensions CSV.
+    const preflightFailed: WfsConversionFailedItem[] = [];
+    const mpItems: any[] = [];
+    for (const sku of data.skus) {
+      const r = bySku.get(sku);
+      if (!r) {
+        preflightFailed.push({
+          sku,
+          status: "MISSING",
+          reason: "SKU not found in cached catalog — re-sync catalog first",
+        });
+        continue;
+      }
+      const length = Number(r.shipping_length ?? 0);
+      const width = Number(r.shipping_width ?? 0);
+      const height = Number(r.shipping_height ?? 0);
+      const weight = Number(r.shipping_weight ?? 0);
+      const missing: string[] = [];
+      if (!(length > 0)) missing.push("length");
+      if (!(width > 0)) missing.push("width");
+      if (!(height > 0)) missing.push("height");
+      if (!(weight > 0)) missing.push("weight");
+      if (missing.length > 0) {
+        preflightFailed.push({
           sku: r.sku,
-          wfsConfig: {
-            gtin: gtin || undefined,
-            countryOfOrigin: r.country_of_origin || "USA",
-            isHazardousMaterial: isHazmat,
-            productLength: Number(r.shipping_length ?? 0),
-            productWidth: Number(r.shipping_width ?? 0),
-            productHeight: Number(r.shipping_height ?? 0),
-            productWeight: Number(r.shipping_weight ?? 0),
-          },
-          shippingRestrictions: { restrictionType: "None_" },
-        };
+          status: "NO_DIMENSIONS",
+          reason: `No dimensions on file (missing: ${missing.join(", ")}) — fill via Import dimensions CSV`,
+        });
+        continue;
+      }
+      const sds = classifySds(r.product_name);
+      const isHazmat = sds.requirement === "Likely required";
+      const gtin = (r.gtin || r.upc || "").trim();
+      mpItems.push({
+        sku: r.sku,
+        wfsConfig: {
+          gtin: gtin || undefined,
+          countryOfOrigin: r.country_of_origin || "USA",
+          isHazardousMaterial: isHazmat,
+          productLength: length,
+          productWidth: width,
+          productHeight: height,
+          productWeight: weight,
+        },
+        shippingRestrictions: { restrictionType: "None_" },
       });
+    }
 
     const feedBody = {
       MPItemFeedHeader: {
@@ -2102,13 +2131,30 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       .insert({
         sku_count: mpItems.length,
         skus: mpItems.map((i) => i.sku),
-        status: "submitting",
-        response: {},
+        status: mpItems.length === 0 ? "no_dimensions" : "submitting",
+        response: { preflightFailed },
       })
       .select("id")
       .single();
     if (insErr) throw new Error(`conversion log insert failed: ${insErr.message}`);
     const runId = (runRow as any).id as string;
+
+    // Nothing left to submit — return preflight failures only.
+    if (mpItems.length === 0) {
+      return {
+        runId,
+        feedId: null,
+        status: "no_dimensions",
+        submittedCount: 0,
+        itemsReceived: null,
+        itemsSucceeded: null,
+        itemsFailed: preflightFailed.length,
+        successSkus: [],
+        failedItems: preflightFailed,
+        ingestionErrors: [],
+        timedOut: false,
+      };
+    }
 
     try {
       const submitRes = await walmartApi.submitFeed(feedType, feedBody);
