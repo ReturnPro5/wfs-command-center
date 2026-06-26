@@ -1328,6 +1328,25 @@ function mergeReportRows(base: ItemReportRow | undefined, next: ItemReportRow): 
   return merged;
 }
 
+function getItemImageUrl(it: any, report?: ItemReportRow): string | undefined {
+  return String(
+    report?.mainImageUrl ??
+      it?.mainImageUrl ??
+      it?.main_image_url ??
+      it?.primaryImageUrl ??
+      it?.primaryImageURL ??
+      it?.productImageUrl ??
+      it?.productMainImageUrl ??
+      it?.imageUrl ??
+      it?.imageURL ??
+      it?.PrimaryImageURL ??
+      it?.productSecondaryImageURL ??
+      (Array.isArray(it?.images) ? (it.images[0]?.url ?? it.images[0]?.imageUrl ?? it.images[0]) : "") ??
+      (Array.isArray(it?.productImages) ? (it.productImages[0]?.url ?? it.productImages[0]?.imageUrl ?? it.productImages[0]) : "") ??
+      ""
+  ).trim() || undefined;
+}
+
 function findCol(header: string[], aliases: readonly string[]): number {
   for (const a of aliases) {
     const i = header.indexOf(a);
@@ -1648,7 +1667,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
           publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
           fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
           brand: report?.brand,
-          mainImageUrl: report?.mainImageUrl,
+          mainImageUrl: getItemImageUrl(it, report),
           price: report?.price ?? null,
           productType: report?.productType,
         };
@@ -2090,7 +2109,7 @@ async function getCatalogPageInternal(
         fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
         category: String(it.category ?? it.productType ?? it.primaryCategory ?? report?.productType ?? ""),
         brand: report?.brand,
-        mainImageUrl: report?.mainImageUrl,
+        mainImageUrl: getItemImageUrl(it, report),
         price: report?.price ?? null,
         productType: report?.productType,
       };
