@@ -409,21 +409,35 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       }
       if (resolved.length === 0) throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
 
-      // Chunk into batches so each server call stays well under the Worker
-      // timeout. ~4500 sequential UPDATEs in one call were freezing.
-      const BATCH = 200;
+      // Larger batches + parallel server calls. Each server call now fans
+      // out internally with a concurrency pool, so we keep client parallelism
+      // modest to avoid swamping the database.
+      const BATCH = 500;
+      const CLIENT_CONCURRENCY = 4;
+      const chunks: Array<Array<typeof resolved[number]>> = [];
+      for (let i = 0; i < resolved.length; i += BATCH) {
+        chunks.push(resolved.slice(i, i + BATCH));
+      }
       let updated = 0;
       let skipped = 0;
       const allErrors: Array<{ sku: string; reason: string }> = [];
+      let done = 0;
       setImportProgress({ done: 0, total: resolved.length });
-      for (let i = 0; i < resolved.length; i += BATCH) {
-        const chunk = resolved.slice(i, i + BATCH);
-        const res = await importDimensions({ data: { rows: chunk } });
-        updated += res.updated;
-        skipped += res.skipped;
-        allErrors.push(...res.errors);
-        setImportProgress({ done: Math.min(i + BATCH, resolved.length), total: resolved.length });
-      }
+      let cursor = 0;
+      await Promise.all(
+        Array.from({ length: CLIENT_CONCURRENCY }, async () => {
+          while (cursor < chunks.length) {
+            const idx = cursor++;
+            const chunk = chunks[idx];
+            const res = await importDimensions({ data: { rows: chunk } });
+            updated += res.updated;
+            skipped += res.skipped;
+            allErrors.push(...res.errors);
+            done += chunk.length;
+            setImportProgress({ done, total: resolved.length });
+          }
+        })
+      );
       const finalRes: ImportDimensionsResult = {
         received: resolved.length,
         updated,
