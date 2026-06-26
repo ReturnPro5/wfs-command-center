@@ -2236,7 +2236,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       const manufacturer = (r.manufacturer ?? "").trim() || brand;
       if (!brand) missing.push("brand");
       if (!manufacturer) missing.push("manufacturer");
-      if (!(r.main_image_url ?? "").trim()) missing.push("mainImageUrl");
+      // mainImageUrl is optional per Walmart — do not block submission when missing
 
       if (!(r.country_of_origin ?? "").trim()) missing.push("countryOfOrigin");
       if (!(r.product_type ?? "").trim()) missing.push("productType");
@@ -2355,11 +2355,12 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       for (const [subCategory, items] of groups) {
         const supplierItems = items.map((it) => {
           const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
+          const img = String(r.main_image_url ?? "").trim();
           return {
             Visible: {
               [it.visibleKey]: {
                 manufacturer,
-                mainImageUrl: String(r.main_image_url).trim(),
+                ...(img ? { mainImageUrl: img } : {}),
               },
             },
             Orderable: {
