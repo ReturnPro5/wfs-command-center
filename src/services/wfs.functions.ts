@@ -2384,19 +2384,13 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               sku: r.sku,
               orderableGTIN: gtin,
               countryOfOriginAssembly: [String(r.country_of_origin).trim()],
-              packLevel: "Each",
-              isOrderableUnit: "Yes",
-              isConsumerUnit: "Yes",
-              tradeItemIdentifier: [
-                { tradeItemIdType: gtin.length === 12 ? "UPC" : "GTIN", tradeItemIdValue: gtin },
-              ],
-              tradeItemDepth: length,
-              tradeItemWidth: width,
-              tradeItemHeight: height,
-              tradeItemWeight: weight,
-              tradeItemDimensionUOM: "in",
-              tradeItemWeightUOM: "lb",
-              qtyOfNextLowestPackLevel: 1,
+              each: {
+                eachDepth: length,
+                eachWidth: width,
+                eachHeight: height,
+                eachWeight: weight,
+                eachGTIN: gtin,
+              },
             },
 
 
