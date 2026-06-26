@@ -2331,7 +2331,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       const manufacturer = (r.manufacturer ?? "").trim() || brand;
       if (!brand) missing.push("brand");
       if (!manufacturer) missing.push("manufacturer");
-      // mainImageUrl is optional per Walmart — do not block submission when missing
+      if (!(r.main_image_url ?? "").trim()) missing.push("mainImageUrl");
 
       if (!(r.country_of_origin ?? "").trim()) missing.push("countryOfOrigin");
       if (!(r.product_type ?? "").trim()) missing.push("productType");
@@ -2915,7 +2915,25 @@ function parseEnrichedFields(raw: any): EnrichedFields {
     short_description: String(
       c?.shortDescription ?? c?.shortdescription ?? c?.productDescription ?? ""
     ),
-    main_image_url: String(c?.mainImageUrl ?? c?.imageUrl ?? c?.primaryImage ?? ""),
+    main_image_url: String(
+      c?.mainImageUrl ??
+        c?.productImageUrl ??
+        c?.productMainImageUrl ??
+        c?.imageUrl ??
+        c?.primaryImage ??
+        c?.primaryImageUrl ??
+        (Array.isArray(c?.images) ? (c.images[0]?.url ?? c.images[0]?.imageUrl ?? c.images[0]) : "") ??
+        (Array.isArray(c?.productImages) ? (c.productImages[0]?.url ?? c.productImages[0]) : "") ??
+        c?.productSecondaryImageURL ??
+        extractAdditionalAttr(attrs, [
+          "main_image_url",
+          "mainimageurl",
+          "product_image_url",
+          "productimageurl",
+          "primary_image_url",
+        ]) ??
+        ""
+    ),
     price: priceAmt,
     currency,
     product_type: String(c?.productType ?? c?.productSubType ?? ""),
