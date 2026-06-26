@@ -2111,6 +2111,101 @@ async function getCatalogPageInternal(
 }
 
 
+// ─── Country of Origin normalizer ────────────────────────
+// Walmart requires "CC - Country Name" format, not bare country names.
+const COUNTRY_MAP: Record<string, string> = {
+  "china": "CN - China", "cn": "CN - China",
+  "united states": "US - United States", "us": "US - United States", "usa": "US - United States",
+  "india": "IN - India", "in": "IN - India",
+  "mexico": "MX - Mexico", "mx": "MX - Mexico",
+  "japan": "JP - Japan", "jp": "JP - Japan",
+  "germany": "DE - Germany", "de": "DE - Germany",
+  "united kingdom": "GB - United Kingdom", "gb": "GB - United Kingdom", "uk": "GB - United Kingdom",
+  "france": "FR - France", "fr": "FR - France",
+  "italy": "IT - Italy", "it": "IT - Italy",
+  "canada": "CA - Canada", "ca": "CA - Canada",
+  "south korea": "KR - Korea, South", "korea": "KR - Korea, South", "kr": "KR - Korea, South",
+  "taiwan": "TW - Taiwan", "tw": "TW - Taiwan",
+  "vietnam": "VN - Vietnam", "vn": "VN - Vietnam",
+  "thailand": "TH - Thailand", "th": "TH - Thailand",
+  "indonesia": "ID - Indonesia", "id": "ID - Indonesia",
+  "malaysia": "MY - Malaysia", "my": "MY - Malaysia",
+  "philippines": "PH - Philippines", "ph": "PH - Philippines",
+  "brazil": "BR - Brazil", "br": "BR - Brazil",
+  "turkey": "TR - Turkey", "tr": "TR - Turkey",
+  "poland": "PL - Poland", "pl": "PL - Poland",
+  "spain": "ES - Spain", "es": "ES - Spain",
+  "netherlands": "NL - Netherlands", "nl": "NL - Netherlands",
+  "australia": "AU - Australia", "au": "AU - Australia",
+  "bangladesh": "BD - Bangladesh", "bd": "BD - Bangladesh",
+  "pakistan": "PK - Pakistan", "pk": "PK - Pakistan",
+  "cambodia": "KH - Cambodia", "kh": "KH - Cambodia",
+  "sri lanka": "LK - Sri Lanka", "lk": "LK - Sri Lanka",
+  "singapore": "SG - Singapore", "sg": "SG - Singapore",
+  "hong kong": "HK - Hong Kong", "hk": "HK - Hong Kong",
+  "switzerland": "CH - Switzerland", "ch": "CH - Switzerland",
+  "sweden": "SE - Sweden", "se": "SE - Sweden",
+  "ireland": "IE - Ireland", "ie": "IE - Ireland",
+  "israel": "IL - Israel", "il": "IL - Israel",
+  "egypt": "EG - Egypt", "eg": "EG - Egypt",
+  "south africa": "ZA - South Africa", "za": "ZA - South Africa",
+  "colombia": "CO - Colombia", "co": "CO - Colombia",
+  "chile": "CL - Chile", "cl": "CL - Chile",
+  "peru": "PE - Peru", "pe": "PE - Peru",
+  "argentina": "AR - Argentina", "ar": "AR - Argentina",
+  "portugal": "PT - Portugal", "pt": "PT - Portugal",
+  "czech republic": "CZ - Czech Republic", "cz": "CZ - Czech Republic",
+  "romania": "RO - Romania", "ro": "RO - Romania",
+  "hungary": "HU - Hungary", "hu": "HU - Hungary",
+  "austria": "AT - Austria", "at": "AT - Austria",
+  "denmark": "DK - Denmark", "dk": "DK - Denmark",
+  "finland": "FI - Finland", "fi": "FI - Finland",
+  "norway": "NO - Norway", "no": "NO - Norway",
+  "new zealand": "NZ - New Zealand", "nz": "NZ - New Zealand",
+  "costa rica": "CR - Costa Rica", "cr": "CR - Costa Rica",
+  "dominican republic": "DO - Dominican Republic", "do": "DO - Dominican Republic",
+  "guatemala": "GT - Guatemala", "gt": "GT - Guatemala",
+  "honduras": "HN - Honduras", "hn": "HN - Honduras",
+  "el salvador": "SV - El Salvador", "sv": "SV - El Salvador",
+  "nicaragua": "NI - Nicaragua", "ni": "NI - Nicaragua",
+  "panama": "PA - Panama", "pa": "PA - Panama",
+  "ecuador": "EC - Ecuador", "ec": "EC - Ecuador",
+  "uruguay": "UY - Uruguay", "uy": "UY - Uruguay",
+  "paraguay": "PY - Paraguay", "py": "PY - Paraguay",
+  "bolivia": "BO - Bolivia", "bo": "BO - Bolivia",
+  "venezuela": "VE - Venezuela", "ve": "VE - Venezuela",
+  "puerto rico": "PR - Puerto Rico", "pr": "PR - Puerto Rico",
+  "myanmar": "MM - Myanmar", "mm": "MM - Myanmar",
+  "nepal": "NP - Nepal", "np": "NP - Nepal",
+  "russia": "RU - Russian Federation", "ru": "RU - Russian Federation",
+  "ukraine": "UA - Ukraine", "ua": "UA - Ukraine",
+  "morocco": "MA - Morocco", "ma": "MA - Morocco",
+  "nigeria": "NG - Nigeria", "ng": "NG - Nigeria",
+  "kenya": "KE - Kenya", "ke": "KE - Kenya",
+  "ethiopia": "ET - Ethiopia", "et": "ET - Ethiopia",
+  "ghana": "GH - Ghana", "gh": "GH - Ghana",
+  "tunisia": "TN - Tunisia", "tn": "TN - Tunisia",
+  "jordan": "JO - Jordan", "jo": "JO - Jordan",
+  "saudi arabia": "SA - Saudi Arabia", "sa": "SA - Saudi Arabia",
+  "united arab emirates": "AE - United Arab Emirates", "ae": "AE - United Arab Emirates", "uae": "AE - United Arab Emirates",
+  "qatar": "QA - Qatar", "qa": "QA - Qatar",
+  "kuwait": "KW - Kuwait", "kw": "KW - Kuwait",
+  "iraq": "IQ - Iraq", "iq": "IQ - Iraq",
+  "iran": "IR - Iran", "ir": "IR - Iran",
+  "greece": "GR - Greece", "gr": "GR - Greece",
+  "belgium": "BE - Belgium", "be": "BE - Belgium",
+  "luxembourg": "LU - Luxembourg", "lu": "LU - Luxembourg",
+};
+
+/** Convert bare country name/code to Walmart's "CC - Name" format */
+function normalizeCountryOfOrigin(raw: string): string {
+  const trimmed = raw.trim();
+  // Already in "XX - Name" format
+  if (/^[A-Z]{2}\s*-\s*.+/.test(trimmed)) return trimmed;
+  const key = trimmed.toLowerCase();
+  return COUNTRY_MAP[key] ?? trimmed;
+}
+
 // ─── Bulk WFS Conversion ────────────────────────────────
 // Submits selected SKUs to Walmart via the WFS item feed.
 // NOTE: Walmart's WFS feed typically requires additional attributes
@@ -2383,7 +2478,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
             TradeItem: {
               sku: r.sku,
               orderableGTIN: gtin,
-              countryOfOriginAssembly: [String(r.country_of_origin).trim()],
+              countryOfOriginAssembly: [normalizeCountryOfOrigin(String(r.country_of_origin))],
               each: {
                 eachDepth: length,
                 eachWidth: width,
