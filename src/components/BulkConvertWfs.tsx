@@ -365,13 +365,52 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     setImportResult(null);
     try {
       const text = await file.text();
-      const { rows, errors } = parseDimensionsCsv(text);
+      const { rows: parsed, errors } = parseDimensionsCsv(text);
       if (errors.length > 0) throw new Error(errors.join("; "));
-      if (rows.length === 0) throw new Error("no data rows found");
-      const res = await importDimensions({ data: { rows } });
+      if (parsed.length === 0) throw new Error("no data rows found");
+
+      // Build UPC -> SKU(s) lookup from current catalog so a UPC-keyed import
+      // file (Walmart's "UPC,DimensionD,DimensionW,DimensionH,ShippingWeight"
+      // export format) can be applied to every matching SKU.
+      const upcToSkus = new Map<string, string[]>();
+      for (const it of items) {
+        const u = (it.upc ?? "").replace(/[^0-9]/g, "");
+        if (!u) continue;
+        const arr = upcToSkus.get(u) ?? [];
+        arr.push(it.sku);
+        upcToSkus.set(u, arr);
+      }
+
+      const resolved: Array<{
+        sku: string;
+        length: number | null;
+        width: number | null;
+        height: number | null;
+        weight: number | null;
+        countryOfOrigin?: string;
+      }> = [];
+      let unresolved = 0;
+      for (const r of parsed) {
+        if (r.sku) {
+          resolved.push({ sku: r.sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
+          continue;
+        }
+        const u = (r.upc ?? "").replace(/[^0-9]/g, "");
+        const skus = upcToSkus.get(u);
+        if (!skus || skus.length === 0) {
+          unresolved++;
+          continue;
+        }
+        for (const sku of skus) {
+          resolved.push({ sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
+        }
+      }
+      if (resolved.length === 0) throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
+
+      const res = await importDimensions({ data: { rows: resolved } });
       setImportResult(res);
       toast.success(
-        `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors`
+        `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
       );
       void refreshOverview();
     } catch (e) {
@@ -382,6 +421,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       if (dimFileRef.current) dimFileRef.current.value = "";
     }
   }
+
 
 
 
