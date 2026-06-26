@@ -2196,9 +2196,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
             submit: submitRes,
             status: statusPayload,
             successSkus,
-            failedItems,
+            failedItems: failedItems as unknown as Record<string, unknown>[],
             timedOut,
-          },
+          } as any,
         })
         .eq("id", runId);
 
