@@ -1422,10 +1422,13 @@ function createFulfillmentReportParser() {
     if (!headerParsed) {
       delimiter = detectDelimiter(line);
       const header = parseCsvLine(line, delimiter).map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ""));
+      const shiftedHeader = header.some((h, i) => h !== (header[i - 1] ?? "") && header.indexOf(h) !== i);
       idx = indexHeader(header);
       headerParsed = true;
       if (idx.sku < 0) {
         console.warn(`[WFS:catalog] item report header missing sku column. header=${header.slice(0, 30).join("|")}`);
+      } else if (shiftedHeader) {
+        console.warn(`[WFS:catalog] item report header has duplicate names; CSV may be malformed. header=${header.slice(0, 55).join("|")}`);
       } else {
         console.log(`[WFS:catalog] item report cols sku=${idx.sku} fulfillment=${idx.fulfillment} brand=${idx.brand} image=${idx.image} price=${idx.price} productType=${idx.productType}`);
       }
