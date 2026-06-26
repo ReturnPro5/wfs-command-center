@@ -789,6 +789,77 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         </section>
       )}
 
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span>
+          {filtered.length === 0
+            ? "0 results"
+            : `Showing ${(pageStart + 1).toLocaleString()}–${pageEnd.toLocaleString()} of ${filtered.length.toLocaleString()}`}
+        </span>
+        <div className="flex-1" />
+        <label className="flex items-center gap-1">
+          Per page
+          <Select value={String(pageSize)} onValueChange={(v) => { setPageSize(Number(v)); setPage(1); }}>
+            <SelectTrigger className="h-8 w-24 bg-secondary border-border">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="100">100</SelectItem>
+              <SelectItem value="250">250</SelectItem>
+              <SelectItem value="500">500</SelectItem>
+              <SelectItem value="1000">1000</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+        <button
+          onClick={selectPageOnly}
+          disabled={visible.length === 0}
+          className="rounded border border-border bg-secondary px-2 py-1 hover:bg-secondary/70 disabled:opacity-50"
+          title="Replace current selection with the SKUs on this page"
+        >
+          Select this page ({visible.length})
+        </button>
+        <button
+          onClick={() => setSelected(new Set())}
+          disabled={selected.size === 0}
+          className="rounded border border-border bg-secondary px-2 py-1 hover:bg-secondary/70 disabled:opacity-50"
+        >
+          Clear selection
+        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setPage(1)}
+            disabled={page <= 1}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            «
+          </button>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            ‹
+          </button>
+          <span className="px-1">
+            Page {page} / {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            ›
+          </button>
+          <button
+            onClick={() => setPage(totalPages)}
+            disabled={page >= totalPages}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            »
+          </button>
+        </div>
+      </div>
+
       <DataTableShell>
         <Thead>
           <tr>
