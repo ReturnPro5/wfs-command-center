@@ -2466,6 +2466,11 @@ export interface ImportDimensionsRow {
   weightUnit?: string;
   dimUnit?: string;
   countryOfOrigin?: string;
+  brand?: string;
+  manufacturer?: string;
+  mainImageUrl?: string;
+  price?: number | null;
+  productType?: string;
 }
 
 export interface ImportDimensionsResult {
@@ -2490,6 +2495,11 @@ export const importDimensions = createServerFn({ method: "POST" })
               weightUnit: z.string().max(8).optional(),
               dimUnit: z.string().max(8).optional(),
               countryOfOrigin: z.string().max(64).optional(),
+              brand: z.string().max(120).optional(),
+              manufacturer: z.string().max(120).optional(),
+              mainImageUrl: z.string().max(500).optional(),
+              price: z.number().positive().nullable().optional(),
+              productType: z.string().max(120).optional(),
             })
           )
           .min(1)
@@ -2503,32 +2513,38 @@ export const importDimensions = createServerFn({ method: "POST" })
     let skipped = 0;
 
     const tasks = data.rows.map((row) => async () => {
-      const hasAll =
+      const patch: Record<string, unknown> = {};
+      // Dims are optional now — we accept partial enrichment rows. The
+      // submit step will reject any SKU that still has gaps.
+      if ((row.length ?? 0) > 0) patch.shipping_length = row.length;
+      if ((row.width ?? 0) > 0) patch.shipping_width = row.width;
+      if ((row.height ?? 0) > 0) patch.shipping_height = row.height;
+      if ((row.weight ?? 0) > 0) patch.shipping_weight = row.weight;
+      if (row.dimUnit) patch.shipping_dim_unit = row.dimUnit;
+      if (row.weightUnit) patch.shipping_weight_unit = row.weightUnit;
+      if (row.countryOfOrigin?.trim()) patch.country_of_origin = row.countryOfOrigin.trim();
+      if (row.brand?.trim()) patch.brand = row.brand.trim();
+      if (row.manufacturer?.trim()) patch.manufacturer = row.manufacturer.trim();
+      if (row.mainImageUrl?.trim()) patch.main_image_url = row.mainImageUrl.trim();
+      if (row.productType?.trim()) patch.product_type = row.productType.trim();
+      if (row.price != null && row.price > 0) patch.price = row.price;
+
+      if (Object.keys(patch).length === 0) {
+        skipped++;
+        errors.push({ sku: row.sku, reason: "no fields to update" });
+        return;
+      }
+      patch.enriched_at = new Date().toISOString();
+      // Status flips to "enriched" only when dims are all set; otherwise
+      // leave whatever status was there so the submit preflight can still
+      // catch missing fields downstream.
+      const hasAllDims =
         (row.length ?? 0) > 0 &&
         (row.width ?? 0) > 0 &&
         (row.height ?? 0) > 0 &&
         (row.weight ?? 0) > 0;
-      if (!hasAll) {
-        skipped++;
-        errors.push({
-          sku: row.sku,
-          reason: "missing one or more of length/width/height/weight",
-        });
-        return;
-      }
-      const patch: Record<string, unknown> = {
-        shipping_length: row.length,
-        shipping_width: row.width,
-        shipping_height: row.height,
-        shipping_weight: row.weight,
-        shipping_dim_unit: row.dimUnit || "in",
-        shipping_weight_unit: row.weightUnit || "lb",
-        enrichment_status: "enriched",
-        enriched_at: new Date().toISOString(),
-      };
-      if (row.countryOfOrigin && row.countryOfOrigin.trim()) {
-        patch.country_of_origin = row.countryOfOrigin.trim();
-      }
+      if (hasAllDims) patch.enrichment_status = "enriched";
+
       const { error, count } = await supabaseAdmin
         .from("catalog_items")
         .update(patch as any, { count: "exact" })
@@ -2545,8 +2561,6 @@ export const importDimensions = createServerFn({ method: "POST" })
       updated++;
     });
 
-    // Run updates with a concurrency pool so a batch finishes in roughly
-    // wall = (rows / CONCURRENCY) * per-row latency, instead of sequentially.
     const CONCURRENCY = 25;
     let cursor = 0;
     await Promise.all(
@@ -2560,6 +2574,7 @@ export const importDimensions = createServerFn({ method: "POST" })
 
     return { received: data.rows.length, updated, skipped, errors };
   });
+
 
 
 export interface WfsConversionRunSummary {
