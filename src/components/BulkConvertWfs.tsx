@@ -299,7 +299,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   const pageStart = (page - 1) * pageSize;
   const pageEnd = Math.min(pageStart + pageSize, filtered.length);
   const visible = filtered.slice(pageStart, pageEnd);
-  const truncated = false;
+  
 
   const selectedFlagged = useMemo(() => {
     let n = 0;
