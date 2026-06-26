@@ -39,8 +39,20 @@ type SdsFilter = "ALL" | SdsRequirement;
 
 
 
+// Convert-to-WFS template columns. SKU is the canonical key; UPC is
+// included as a fallback identifier so a Walmart-style "UPC only" import
+// also works. The remaining columns map 1:1 to the SupplierItem schema
+// fields Walmart requires for OMNI_WFS.
 const DIM_TEMPLATE_HEADER = [
+  "SKU",
   "UPC",
+  "ProductName",
+  "ProductType",
+  "Brand",
+  "Manufacturer",
+  "MainImageUrl",
+  "Price",
+  "CountryOfOrigin",
   "DimensionD",
   "DimensionW",
   "DimensionH",
@@ -61,7 +73,15 @@ function exportDimensionsTemplate(rows: Row[]) {
   for (const r of rows) {
     lines.push(
       [
+        csvEscapeId(r.sku),
         csvEscapeId(r.upc),
+        csvEscape(r.productName),
+        csvEscape(r.category ?? ""),
+        "",
+        "",
+        "",
+        "",
+        "",
         "",
         "",
         "",
@@ -75,7 +95,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `wfs-dimensions-template-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `wfs-convert-template-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -148,6 +168,11 @@ interface ParsedDimRow {
   height: number | null;
   weight: number | null;
   countryOfOrigin?: string;
+  brand?: string;
+  manufacturer?: string;
+  mainImageUrl?: string;
+  productType?: string;
+  price?: number | null;
 }
 
 function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: string[] } {
@@ -159,24 +184,23 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
     header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
   const iSku = idx(["sku"]);
   const iUpc = idx(["upc"]);
-  // Accept either "Length / Width / Height / Weight" OR Walmart's
-  // "DimensionD / DimensionW / DimensionH / ShippingWeight" headers.
   const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
   const iWid = idx(["width", "dimensionw", "dimension w"]);
   const iHei = idx(["height", "dimensionh", "dimension h"]);
   const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
-  const iCoo = idx(["country of origin", "country_of_origin", "country"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country"]);
+  const iBrand = idx(["brand"]);
+  const iMfr = idx(["manufacturer", "mfr"]);
+  const iImg = idx(["mainimageurl", "main image url", "imageurl", "image"]);
+  const iPt = idx(["producttype", "product type", "category"]);
+  const iPrice = idx(["price"]);
   if (iSku < 0 && iUpc < 0) {
     errors.push("missing SKU or UPC column");
     return { rows: [], errors };
   }
-  if (iLen < 0 || iWid < 0 || iHei < 0 || iWgt < 0) {
-    errors.push("missing one or more dimension columns (need DimensionD/W/H + ShippingWeight, or Length/Width/Height/Weight)");
-    return { rows: [], errors };
-  }
   const num = (s: string | undefined): number | null => {
     if (s == null) return null;
-    const t = s.replace(/[",=']/g, "").trim();
+    const t = s.replace(/[",=$']/g, "").trim();
     if (!t) return null;
     const n = Number(t);
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -192,11 +216,16 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
     rows.push({
       sku: sku || undefined,
       upc: upc || undefined,
-      length: num(cells[iLen]),
-      width: num(cells[iWid]),
-      height: num(cells[iHei]),
-      weight: num(cells[iWgt]),
-      countryOfOrigin: iCoo >= 0 ? (cells[iCoo] ?? "").trim() || undefined : undefined,
+      length: iLen >= 0 ? num(cells[iLen]) : null,
+      width: iWid >= 0 ? num(cells[iWid]) : null,
+      height: iHei >= 0 ? num(cells[iHei]) : null,
+      weight: iWgt >= 0 ? num(cells[iWgt]) : null,
+      countryOfOrigin: iCoo >= 0 ? clean(cells[iCoo]) || undefined : undefined,
+      brand: iBrand >= 0 ? clean(cells[iBrand]) || undefined : undefined,
+      manufacturer: iMfr >= 0 ? clean(cells[iMfr]) || undefined : undefined,
+      mainImageUrl: iImg >= 0 ? clean(cells[iImg]) || undefined : undefined,
+      productType: iPt >= 0 ? clean(cells[iPt]) || undefined : undefined,
+      price: iPrice >= 0 ? num(cells[iPrice]) : null,
     });
   }
   return { rows, errors };
