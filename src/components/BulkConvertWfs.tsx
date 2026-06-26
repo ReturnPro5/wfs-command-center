@@ -352,6 +352,36 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   const [enrichProgress, setEnrichProgress] = useState<string>("");
   const stopEnrichRef = useRef(false);
 
+  // ─── Dimensions import ────────────────────────────────
+  const dimFileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
+
+  async function onDimensionsFile(file: File) {
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const text = await file.text();
+      const { rows, errors } = parseDimensionsCsv(text);
+      if (errors.length > 0) throw new Error(errors.join("; "));
+      if (rows.length === 0) throw new Error("no data rows found");
+      const res = await importDimensions({ data: { rows } });
+      setImportResult(res);
+      toast.success(
+        `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors`
+      );
+      void refreshOverview();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Import failed: ${msg}`);
+    } finally {
+      setImporting(false);
+      if (dimFileRef.current) dimFileRef.current.value = "";
+    }
+  }
+
+
+
   const refreshOverview = useCallback(async () => {
     try {
       const o = await getEnrichmentOverview();
