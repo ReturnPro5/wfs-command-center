@@ -1830,12 +1830,14 @@ export const syncCatalogStep = createServerFn({ method: "POST" })
           last_seen_at: now,
           last_synced_at: now,
         };
-        // Fields auto-populated from the Walmart Item Report v4. Only write
-        // when present so we don't blank out manually-imported values.
-        if (it.brand) row.brand = it.brand;
-        if (it.mainImageUrl) row.main_image_url = it.mainImageUrl;
+        // Fields auto-populated from the Walmart Item Report v4. Always
+        // include with safe defaults so batched upserts have a uniform
+        // column set (Postgres NOT NULL columns reject undefined→null).
+        row.brand = it.brand ?? "";
+        row.main_image_url = it.mainImageUrl ?? "";
         if (typeof it.price === "number" && Number.isFinite(it.price)) row.price = it.price;
-        if (it.productType) row.product_type = it.productType;
+        row.product_type = it.productType ?? "";
+
         return row;
       });
 
