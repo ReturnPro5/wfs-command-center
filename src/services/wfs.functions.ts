@@ -2911,7 +2911,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     let failed = 0;
     const now = new Date().toISOString();
 
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 16;
     let idx = 0;
     async function worker() {
       while (idx < skus.length) {
