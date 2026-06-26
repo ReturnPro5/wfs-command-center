@@ -3,11 +3,14 @@ import { toast } from "sonner";
 import {
   enrichCatalogStep,
   getEnrichmentOverview,
+  importDimensions,
   submitWfsConversion,
   type CatalogIdentifier,
   type EnrichmentOverview,
+  type ImportDimensionsResult,
   type WfsConversionRunResult,
 } from "@/services/wfs.functions";
+
 import { classifySds, type SdsClassification, type SdsRequirement } from "@/lib/sdsClassifier";
 import { SearchFilter } from "@/components/SearchFilter";
 import { CategoryFilter } from "@/components/CategoryFilter";
@@ -35,6 +38,168 @@ type Row = CatalogIdentifier & { sds: SdsClassification };
 type SdsFilter = "ALL" | SdsRequirement;
 
 const RENDER_CAP = 2000;
+
+const DIM_TEMPLATE_HEADER = [
+  "SKU",
+  "UPC",
+  "GTIN",
+  "Product Name",
+  "Length (in)",
+  "Width (in)",
+  "Height (in)",
+  "Weight (lb)",
+  "Country Of Origin",
+] as const;
+
+function csvEscape(v: string): string {
+  return `"${(v ?? "").replace(/"/g, '""')}"`;
+}
+function csvEscapeId(v: string): string {
+  const s = (v ?? "").replace(/"/g, '""');
+  return s ? `="${s}"` : `""`;
+}
+
+function exportDimensionsTemplate(rows: Row[]) {
+  const lines = [DIM_TEMPLATE_HEADER.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvEscape(r.sku),
+        csvEscapeId(r.upc),
+        csvEscapeId(r.gtin),
+        csvEscape(r.productName),
+        "",
+        "",
+        "",
+        "",
+        "",
+      ].join(",")
+    );
+  }
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `wfs-dimensions-template-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Minimal CSV parser supporting quoted fields, escaped quotes, and ="..." cells.
+function parseCsv(text: string): string[][] {
+  const out: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let i = 0;
+  let inQuotes = false;
+  const src = text.replace(/\r\n?/g, "\n");
+  while (i < src.length) {
+    const c = src[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (src[i + 1] === '"') {
+          cell += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      cell += c;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+    if (c === ",") {
+      row.push(cell);
+      cell = "";
+      i++;
+      continue;
+    }
+    if (c === "\n") {
+      row.push(cell);
+      out.push(row);
+      row = [];
+      cell = "";
+      i++;
+      continue;
+    }
+    if (c === "=" && src[i + 1] === '"') {
+      // Skip Excel formula prefix; the next quote starts the quoted cell.
+      i++;
+      continue;
+    }
+    cell += c;
+    i++;
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    out.push(row);
+  }
+  return out.filter((r) => r.length > 1 || (r[0] && r[0].trim() !== ""));
+}
+
+interface ParsedDimRow {
+  sku: string;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+  weight: number | null;
+  countryOfOrigin?: string;
+}
+
+function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: string[] } {
+  const errors: string[] = [];
+  const grid = parseCsv(text);
+  if (grid.length === 0) return { rows: [], errors: ["empty file"] };
+  const header = grid[0].map((h) => h.trim().toLowerCase());
+  const idx = (names: string[]) =>
+    header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
+  const iSku = idx(["sku"]);
+  const iLen = idx(["length"]);
+  const iWid = idx(["width"]);
+  const iHei = idx(["height"]);
+  const iWgt = idx(["weight"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "country"]);
+  if (iSku < 0) {
+    errors.push("missing SKU column");
+    return { rows: [], errors };
+  }
+  if (iLen < 0 || iWid < 0 || iHei < 0 || iWgt < 0) {
+    errors.push("missing one or more of Length / Width / Height / Weight columns");
+    return { rows: [], errors };
+  }
+  const num = (s: string | undefined): number | null => {
+    if (s == null) return null;
+    const t = s.replace(/[",=]/g, "").trim();
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const rows: ParsedDimRow[] = [];
+  for (let r = 1; r < grid.length; r++) {
+    const cells = grid[r];
+    const sku = (cells[iSku] ?? "").replace(/[",=]/g, "").trim();
+    if (!sku) continue;
+    rows.push({
+      sku,
+      length: num(cells[iLen]),
+      width: num(cells[iWid]),
+      height: num(cells[iHei]),
+      weight: num(cells[iWgt]),
+      countryOfOrigin: iCoo >= 0 ? (cells[iCoo] ?? "").trim() || undefined : undefined,
+    });
+  }
+  return { rows, errors };
+}
+
 
 function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "warn" | "bad" }) {
   const toneCls =
@@ -187,6 +352,36 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   const [enrichProgress, setEnrichProgress] = useState<string>("");
   const stopEnrichRef = useRef(false);
 
+  // ─── Dimensions import ────────────────────────────────
+  const dimFileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
+
+  async function onDimensionsFile(file: File) {
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const text = await file.text();
+      const { rows, errors } = parseDimensionsCsv(text);
+      if (errors.length > 0) throw new Error(errors.join("; "));
+      if (rows.length === 0) throw new Error("no data rows found");
+      const res = await importDimensions({ data: { rows } });
+      setImportResult(res);
+      toast.success(
+        `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors`
+      );
+      void refreshOverview();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Import failed: ${msg}`);
+    } finally {
+      setImporting(false);
+      if (dimFileRef.current) dimFileRef.current.value = "";
+    }
+  }
+
+
+
   const refreshOverview = useCallback(async () => {
     try {
       const o = await getEnrichmentOverview();
@@ -305,8 +500,80 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         )}
       </section>
 
+      {/* Dimensions workflow */}
+      <section className="rounded-md border border-border bg-secondary/20 p-3 space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold">Dimensions workflow</h3>
+            <p className="text-xs text-muted-foreground">
+              Export UPCs for the items currently filtered below, fill in
+              Length / Width / Height / Weight in a spreadsheet, then upload the
+              same file. SKUs without dimensions are flagged as
+              <em className="not-italic"> No dimensions</em> when you submit.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => exportDimensionsTemplate(filtered)}
+              disabled={filtered.length === 0}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              Export UPCs CSV ({filtered.length.toLocaleString()})
+            </button>
+            <input
+              ref={dimFileRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void onDimensionsFile(f);
+              }}
+            />
+            <button
+              onClick={() => dimFileRef.current?.click()}
+              disabled={importing}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
+            >
+              {importing ? "Importing…" : "Import dimensions CSV"}
+            </button>
+          </div>
+        </div>
+        {importResult && (
+          <div className="space-y-1 text-xs">
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span>Received: {importResult.received.toLocaleString()}</span>
+              <span className="text-status-healthy">
+                Updated: {importResult.updated.toLocaleString()}
+              </span>
+              <span className="text-status-warning">
+                Skipped: {importResult.skipped.toLocaleString()}
+              </span>
+              <span className="text-status-critical">
+                Errors: {importResult.errors.length.toLocaleString()}
+              </span>
+            </div>
+            {importResult.errors.length > 0 && (
+              <details>
+                <summary className="cursor-pointer text-muted-foreground">
+                  Show errors
+                </summary>
+                <ul className="mt-1 max-h-48 overflow-y-auto space-y-0.5 font-mono">
+                  {importResult.errors.slice(0, 500).map((e, i) => (
+                    <li key={i}>
+                      <span className="text-primary">{e.sku}</span>{" "}
+                      <span className="text-muted-foreground">{e.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+      </section>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+
         <div className="w-full sm:w-96">
           <SearchFilter
             value={search}

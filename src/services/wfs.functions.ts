@@ -2065,27 +2065,56 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     // Hazmat flag is derived from the product name via our SDS classifier:
     // Likely-required items are sent as hazardous so Walmart routes them to
     // compliance review instead of silently failing later.
-    const mpItems = data.skus
-      .map((sku) => bySku.get(sku))
-      .filter(Boolean)
-      .map((r: any) => {
-        const sds = classifySds(r.product_name);
-        const isHazmat = sds.requirement === "Likely required";
-        const gtin = (r.gtin || r.upc || "").trim();
-        return {
+    //
+    // Preflight: any SKU missing shipping dimensions or weight is dropped
+    // from the feed and reported as a failed item with reason "No dimensions
+    // on file" so the operator can fill them via Import dimensions CSV.
+    const preflightFailed: WfsConversionFailedItem[] = [];
+    const mpItems: any[] = [];
+    for (const sku of data.skus) {
+      const r = bySku.get(sku);
+      if (!r) {
+        preflightFailed.push({
+          sku,
+          status: "MISSING",
+          reason: "SKU not found in cached catalog — re-sync catalog first",
+        });
+        continue;
+      }
+      const length = Number(r.shipping_length ?? 0);
+      const width = Number(r.shipping_width ?? 0);
+      const height = Number(r.shipping_height ?? 0);
+      const weight = Number(r.shipping_weight ?? 0);
+      const missing: string[] = [];
+      if (!(length > 0)) missing.push("length");
+      if (!(width > 0)) missing.push("width");
+      if (!(height > 0)) missing.push("height");
+      if (!(weight > 0)) missing.push("weight");
+      if (missing.length > 0) {
+        preflightFailed.push({
           sku: r.sku,
-          wfsConfig: {
-            gtin: gtin || undefined,
-            countryOfOrigin: r.country_of_origin || "USA",
-            isHazardousMaterial: isHazmat,
-            productLength: Number(r.shipping_length ?? 0),
-            productWidth: Number(r.shipping_width ?? 0),
-            productHeight: Number(r.shipping_height ?? 0),
-            productWeight: Number(r.shipping_weight ?? 0),
-          },
-          shippingRestrictions: { restrictionType: "None_" },
-        };
+          status: "NO_DIMENSIONS",
+          reason: `No dimensions on file (missing: ${missing.join(", ")}) — fill via Import dimensions CSV`,
+        });
+        continue;
+      }
+      const sds = classifySds(r.product_name);
+      const isHazmat = sds.requirement === "Likely required";
+      const gtin = (r.gtin || r.upc || "").trim();
+      mpItems.push({
+        sku: r.sku,
+        wfsConfig: {
+          gtin: gtin || undefined,
+          countryOfOrigin: r.country_of_origin || "USA",
+          isHazardousMaterial: isHazmat,
+          productLength: length,
+          productWidth: width,
+          productHeight: height,
+          productWeight: weight,
+        },
+        shippingRestrictions: { restrictionType: "None_" },
       });
+    }
 
     const feedBody = {
       MPItemFeedHeader: {
@@ -2102,13 +2131,30 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       .insert({
         sku_count: mpItems.length,
         skus: mpItems.map((i) => i.sku),
-        status: "submitting",
-        response: {},
+        status: mpItems.length === 0 ? "no_dimensions" : "submitting",
+        response: { preflightFailed: preflightFailed as unknown as Record<string, unknown>[] } as any,
       })
       .select("id")
       .single();
     if (insErr) throw new Error(`conversion log insert failed: ${insErr.message}`);
     const runId = (runRow as any).id as string;
+
+    // Nothing left to submit — return preflight failures only.
+    if (mpItems.length === 0) {
+      return {
+        runId,
+        feedId: null,
+        status: "no_dimensions",
+        submittedCount: 0,
+        itemsReceived: null,
+        itemsSucceeded: null,
+        itemsFailed: preflightFailed.length,
+        successSkus: [],
+        failedItems: preflightFailed,
+        ingestionErrors: [],
+        timedOut: false,
+      };
+    }
 
     try {
       const submitRes = await walmartApi.submitFeed(feedType, feedBody);
@@ -2202,6 +2248,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         })
         .eq("id", runId);
 
+      const allFailed = [...preflightFailed, ...failedItems];
       return {
         runId,
         feedId,
@@ -2209,9 +2256,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         submittedCount: mpItems.length,
         itemsReceived,
         itemsSucceeded,
-        itemsFailed,
+        itemsFailed: (itemsFailed ?? 0) + preflightFailed.length,
         successSkus,
-        failedItems,
+        failedItems: allFailed,
         ingestionErrors: errs,
         timedOut,
       };
@@ -2224,6 +2271,105 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       throw err;
     }
   });
+
+// ─── Import dimensions CSV ───────────────────────────────
+// Operator workflow: export UPCs → fill dims in a spreadsheet →
+// upload here. This bypasses the items API enrichment for shipping
+// weight & dimensions (which Walmart doesn't reliably return) and
+// marks updated SKUs as fully enriched so they appear in the
+// "Ready to submit" view.
+
+export interface ImportDimensionsRow {
+  sku: string;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
+  weight?: number | null;
+  weightUnit?: string;
+  dimUnit?: string;
+  countryOfOrigin?: string;
+}
+
+export interface ImportDimensionsResult {
+  received: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ sku: string; reason: string }>;
+}
+
+export const importDimensions = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        rows: z
+          .array(
+            z.object({
+              sku: z.string().min(1).max(50),
+              length: z.number().positive().nullable().optional(),
+              width: z.number().positive().nullable().optional(),
+              height: z.number().positive().nullable().optional(),
+              weight: z.number().positive().nullable().optional(),
+              weightUnit: z.string().max(8).optional(),
+              dimUnit: z.string().max(8).optional(),
+              countryOfOrigin: z.string().max(64).optional(),
+            })
+          )
+          .min(1)
+          .max(10000),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }): Promise<ImportDimensionsResult> => {
+    const errors: Array<{ sku: string; reason: string }> = [];
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of data.rows) {
+      const hasAll =
+        (row.length ?? 0) > 0 &&
+        (row.width ?? 0) > 0 &&
+        (row.height ?? 0) > 0 &&
+        (row.weight ?? 0) > 0;
+      if (!hasAll) {
+        skipped++;
+        errors.push({
+          sku: row.sku,
+          reason: "missing one or more of length/width/height/weight",
+        });
+        continue;
+      }
+      const patch: Record<string, unknown> = {
+        shipping_length: row.length,
+        shipping_width: row.width,
+        shipping_height: row.height,
+        shipping_weight: row.weight,
+        shipping_dim_unit: row.dimUnit || "in",
+        shipping_weight_unit: row.weightUnit || "lb",
+        enrichment_status: "enriched",
+        enriched_at: new Date().toISOString(),
+      };
+      if (row.countryOfOrigin && row.countryOfOrigin.trim()) {
+        patch.country_of_origin = row.countryOfOrigin.trim();
+      }
+      const { error, count } = await supabaseAdmin
+        .from("catalog_items")
+        .update(patch as any, { count: "exact" })
+        .eq("sku", row.sku);
+      if (error) {
+        errors.push({ sku: row.sku, reason: error.message });
+        continue;
+      }
+      if ((count ?? 0) === 0) {
+        skipped++;
+        errors.push({ sku: row.sku, reason: "SKU not found in catalog" });
+        continue;
+      }
+      updated++;
+    }
+
+    return { received: data.rows.length, updated, skipped, errors };
+  });
+
 
 export interface WfsConversionRunSummary {
   id: string;
