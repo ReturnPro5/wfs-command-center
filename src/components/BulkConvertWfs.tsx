@@ -674,13 +674,16 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           <div>
             <h3 className="text-sm font-semibold">WFS convert enrichment</h3>
             <p className="text-xs text-muted-foreground">
-              Walmart's OMNI_WFS feed requires <strong>Brand, Manufacturer,
-              MainImageUrl, Price, ProductType, CountryOfOrigin</strong> and
-              shipping <strong>DimensionD / W / H + ShippingWeight</strong>{" "}
-              per SKU. Export the template, fill the blank columns in a
-              spreadsheet, then re-upload — missing fields are reported per-SKU
-              on submit.
+              <strong>Brand, MainImageUrl, Price, and ProductType</strong> are
+              auto-populated from the Walmart Item Report during sync.{" "}
+              <strong>Manufacturer</strong> defaults to Brand on submit. You
+              only need to fill <strong>CountryOfOrigin</strong> and shipping{" "}
+              <strong>DimensionD / W / H + ShippingWeight</strong> per SKU.
+              Export the template (pre-filled where possible), fill the
+              remaining blank columns, then re-upload — missing fields are
+              reported per-SKU on submit.
             </p>
+
           </div>
           <div className="flex flex-wrap gap-2">
             <button
