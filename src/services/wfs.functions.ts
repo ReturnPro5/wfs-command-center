@@ -2048,13 +2048,18 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<WfsConversionRunResult> => {
     // Walmart's "Convert Seller-Fulfilled item to WFS" uses feedType=OMNI_WFS
-    // with the MPItem schema (v4.0). Override via WALMART_WFS_FEED_TYPE if needed.
+    // with the SupplierItem schema (v1.4). The payload requires a
+    // SupplierItemFeedHeader carrying a SINGLE subCategory — every item in
+    // one feed must share that subCategory — plus SupplierItem entries with
+    // Visible/Orderable/TradeItem blocks. We group selected SKUs by
+    // subCategory (derived from productType) and submit one feed per group,
+    // aggregating per-SKU outcomes across all groups into one run record.
     const feedType = process.env.WALMART_WFS_FEED_TYPE || "OMNI_WFS";
 
     const { data: rows, error: readErr } = await supabaseAdmin
       .from("catalog_items")
       .select(
-        "sku, product_name, gtin, upc, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
+        "sku, product_name, gtin, upc, brand, manufacturer, main_image_url, price, currency, product_type, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
       )
       .in("sku", data.skus);
     if (readErr) throw new Error(`catalog lookup failed: ${readErr.message}`);
@@ -2066,16 +2071,31 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       throw new Error("None of the selected SKUs were found in the cached catalog.");
     }
 
-    // Build MPItem entries per Walmart Bulk Item Setup (OMNI_WFS) v4.0 schema.
-    // Hazmat flag is derived from the product name via our SDS classifier:
-    // Likely-required items are sent as hazardous so Walmart routes them to
-    // compliance review instead of silently failing later.
-    //
-    // Preflight: any SKU missing shipping dimensions or weight is dropped
-    // from the feed and reported as a failed item with reason "No dimensions
-    // on file" so the operator can fill them via Import dimensions CSV.
+    // Preflight: drop any SKU that's missing data the OMNI_WFS schema
+    // requires. Each dropped SKU is reported as a failed item with a
+    // human-readable reason so the operator knows exactly which field to
+    // fill via the Import CSV.
     const preflightFailed: WfsConversionFailedItem[] = [];
-    const mpItems: any[] = [];
+    type Ready = {
+      r: any;
+      subCategory: string;
+      visibleKey: string;
+      length: number;
+      width: number;
+      height: number;
+      weight: number;
+      isHazmat: boolean;
+      gtin: string;
+    };
+    const ready: Ready[] = [];
+
+    const slug = (s: string) =>
+      String(s ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
     for (const sku of data.skus) {
       const r = bySku.get(sku);
       if (!r) {
@@ -2095,61 +2115,95 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       if (!(width > 0)) missing.push("width");
       if (!(height > 0)) missing.push("height");
       if (!(weight > 0)) missing.push("weight");
+      if (!(r.brand ?? "").trim()) missing.push("brand");
+      if (!(r.manufacturer ?? "").trim()) missing.push("manufacturer");
+      if (!(r.main_image_url ?? "").trim()) missing.push("mainImageUrl");
+      if (!(r.country_of_origin ?? "").trim()) missing.push("countryOfOrigin");
+      if (!(r.product_type ?? "").trim()) missing.push("productType");
+      if (r.price == null) missing.push("price");
+      const gtin = String(r.gtin || r.upc || "").trim();
+      if (!gtin) missing.push("gtin/upc");
       if (missing.length > 0) {
         preflightFailed.push({
           sku: r.sku,
-          status: "NO_DIMENSIONS",
-          reason: `No dimensions on file (missing: ${missing.join(", ")}) — fill via Import dimensions CSV`,
+          status: "MISSING_FIELDS",
+          reason: `Missing required field(s): ${missing.join(", ")} — fill via Import CSV`,
         });
         continue;
       }
       const sds = classifySds(r.product_name);
       const isHazmat = sds.requirement === "Likely required";
-      const gtin = (r.gtin || r.upc || "").trim();
-      mpItems.push({
-        sku: r.sku,
-        wfsConfig: {
-          gtin: gtin || undefined,
-          countryOfOrigin: r.country_of_origin || "USA",
-          isHazardousMaterial: isHazmat,
-          productLength: length,
-          productWidth: width,
-          productHeight: height,
-          productWeight: weight,
-        },
-        shippingRestrictions: { restrictionType: "None_" },
+      const subCategory =
+        slug(r.sub_category) || slug(r.product_type) || "general";
+      const visibleKey = String(r.product_type).trim();
+      ready.push({
+        r,
+        subCategory,
+        visibleKey,
+        length,
+        width,
+        height,
+        weight,
+        isHazmat,
+        gtin,
       });
     }
 
-    const feedBody = {
-      MPItemFeedHeader: {
-        version: "4.0",
-        requestId: genRequestId(),
-        requestBatchId: `wfs-convert-${Date.now()}`,
-        feedDate: new Date().toISOString(),
-      },
-      MPItem: mpItems,
-    };
+    // Group ready items by subCategory — Walmart accepts only ONE
+    // subCategory per OMNI_WFS feed, so we fan out one submission per
+    // group. Cap the fan-out at 10 distinct groups per run so a single
+    // submit doesn't flood Walmart's feed queue.
+    const groups = new Map<string, Ready[]>();
+    for (const item of ready) {
+      const list = groups.get(item.subCategory) ?? [];
+      list.push(item);
+      groups.set(item.subCategory, list);
+    }
+    const MAX_GROUPS = 10;
+    if (groups.size > MAX_GROUPS) {
+      const overflow: string[] = [];
+      const sorted = Array.from(groups.entries()).sort(
+        (a, b) => b[1].length - a[1].length
+      );
+      for (const [g] of sorted.slice(MAX_GROUPS)) overflow.push(g);
+      for (const g of overflow) {
+        for (const item of groups.get(g) ?? []) {
+          preflightFailed.push({
+            sku: item.r.sku,
+            status: "DEFERRED",
+            reason: `Skipped — selection spans ${groups.size} subCategories, only the largest ${MAX_GROUPS} were sent this run (subCategory=${g})`,
+          });
+        }
+        groups.delete(g);
+      }
+    }
+
+    const submittedCount = Array.from(groups.values()).reduce(
+      (n, list) => n + list.length,
+      0
+    );
 
     const { data: runRow, error: insErr } = await supabaseAdmin
       .from("wfs_conversion_runs")
       .insert({
-        sku_count: mpItems.length,
-        skus: mpItems.map((i) => i.sku),
-        status: mpItems.length === 0 ? "no_dimensions" : "submitting",
-        response: { preflightFailed: preflightFailed as unknown as Record<string, unknown>[] } as any,
+        sku_count: submittedCount,
+        skus: Array.from(groups.values()).flat().map((i) => i.r.sku),
+        status: submittedCount === 0 ? "no_eligible" : "submitting",
+        response: {
+          preflightFailed: preflightFailed as unknown as Record<string, unknown>[],
+          subCategories: Array.from(groups.keys()),
+        } as any,
       })
       .select("id")
       .single();
     if (insErr) throw new Error(`conversion log insert failed: ${insErr.message}`);
     const runId = (runRow as any).id as string;
 
-    // Nothing left to submit — return preflight failures only.
-    if (mpItems.length === 0) {
+    if (submittedCount === 0) {
       return {
         runId,
         feedId: null,
-        status: "no_dimensions",
+        status: "no_eligible",
         submittedCount: 0,
         itemsReceived: null,
         itemsSucceeded: null,
@@ -2161,111 +2215,229 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       };
     }
 
+    // Build one SupplierItem feed per subCategory and submit sequentially.
+    const allFeedIds: string[] = [];
+    const allSubmits: any[] = [];
+    const allStatuses: any[] = [];
+    const allSuccess: string[] = [];
+    const allFailed: WfsConversionFailedItem[] = [];
+    const allErrs: Array<{ sku?: string; type?: string; description?: string }> = [];
+    let aggReceived = 0;
+    let aggSucceeded = 0;
+    let aggFailed = 0;
+    let anyTimedOut = false;
+    let lastStatus = "submitted";
+
     try {
-      const submitRes = await walmartApi.submitFeed(feedType, feedBody);
-      const feedId: string | null =
-        submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
+      for (const [subCategory, items] of groups) {
+        const supplierItems = items.map((it) => {
+          const { r, gtin, isHazmat, length, width, height, weight } = it;
+          return {
+            Visible: {
+              [it.visibleKey]: {
+                manufacturer: String(r.manufacturer).trim(),
+                mainImageUrl: String(r.main_image_url).trim(),
+              },
+            },
+            Orderable: {
+              sku: r.sku,
+              productName: String(r.product_name).trim(),
+              brand: String(r.brand).trim(),
+              productIdentifiers: {
+                productId: gtin,
+                productIdType: gtin.length === 12 ? "UPC" : "GTIN",
+              },
+              price: Number(r.price),
+              startDate: new Date().toISOString(),
+              endDate: "2040-01-01T00:00:00.000Z",
+              stateRestrictions: [{ stateRestrictionsText: "None" }],
+              batteryTechnologyType: "Does Not Contain a Battery",
+              electronicsIndicator: "No",
+              chemicalAerosolPesticide: isHazmat ? "Yes" : "No",
+            },
+            TradeItem: {
+              sku: r.sku,
+              orderableGTIN: gtin,
+              countryOfOriginAssembly: [String(r.country_of_origin).trim()],
+              innerPack: {
+                innerPackGTIN: gtin,
+                qtySellableItemsInnerPack: 1,
+                innerPackDepth: length,
+                innerPackWidth: width,
+                innerPackHeight: height,
+                innerPackWeight: weight,
+              },
+            },
+          };
+        });
 
-      // Poll for terminal status. Walmart returns RECEIVED/INPROGRESS while
-      // processing; we segregate per-SKU outcomes once the feed finishes.
-      let statusPayload: any = null;
-      let timedOut = false;
-      if (feedId) {
-        const MAX_ATTEMPTS = 8;
-        const DELAY_MS = 5000;
-        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-          try {
-            statusPayload = await walmartApi.getFeedStatus(feedId, true);
-          } catch (e) {
-            console.warn(
-              `[WFS:convert] getFeedStatus attempt ${attempt + 1} failed`,
-              e instanceof Error ? e.message : e
-            );
+        const feedBody = {
+          SupplierItemFeedHeader: {
+            subCategory,
+            sellingChannel: "fbw",
+            processMode: "REPLACE",
+            locale: "en",
+            version: "1.4",
+            subset: "EXTERNAL",
+          },
+          SupplierItem: supplierItems,
+        };
+
+        let submitRes: any = null;
+        let statusPayload: any = null;
+        let timedOut = false;
+        try {
+          submitRes = await walmartApi.submitFeed(feedType, feedBody);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          for (const it of items) {
+            allFailed.push({
+              sku: it.r.sku,
+              status: "SUBMIT_ERROR",
+              reason: `Feed submit failed for subCategory=${subCategory}: ${msg}`,
+            });
           }
-          const fs = String(statusPayload?.feedStatus ?? "").toUpperCase();
-          if (fs && fs !== "RECEIVED" && fs !== "INPROGRESS") break;
-          if (attempt < MAX_ATTEMPTS - 1) {
-            await new Promise((res) => setTimeout(res, DELAY_MS));
-          } else {
-            timedOut = true;
+          allSubmits.push({ subCategory, error: msg });
+          continue;
+        }
+        const feedId: string | null =
+          submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
+        if (feedId) allFeedIds.push(feedId);
+        allSubmits.push({ subCategory, feedId, raw: submitRes });
+
+        if (feedId) {
+          const MAX_ATTEMPTS = 8;
+          const DELAY_MS = 5000;
+          for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            try {
+              statusPayload = await walmartApi.getFeedStatus(feedId, true);
+            } catch (e) {
+              console.warn(
+                `[WFS:convert] getFeedStatus attempt ${attempt + 1} failed`,
+                e instanceof Error ? e.message : e
+              );
+            }
+            const fs = String(statusPayload?.feedStatus ?? "").toUpperCase();
+            if (fs && fs !== "RECEIVED" && fs !== "INPROGRESS") break;
+            if (attempt < MAX_ATTEMPTS - 1) {
+              await new Promise((res) => setTimeout(res, DELAY_MS));
+            } else {
+              timedOut = true;
+            }
           }
         }
-      }
+        if (timedOut) anyTimedOut = true;
+        allStatuses.push({ subCategory, feedId, status: statusPayload, timedOut });
+        lastStatus = statusPayload?.feedStatus ?? submitRes?.feedStatus ?? lastStatus;
 
-      const itemsReceived = statusPayload?.itemsReceived ?? null;
-      const itemsSucceeded = statusPayload?.itemsSucceeded ?? null;
-      const itemsFailed = statusPayload?.itemsFailed ?? null;
-      const status =
-        statusPayload?.feedStatus ?? submitRes?.feedStatus ?? "submitted";
+        aggReceived += Number(statusPayload?.itemsReceived ?? 0);
+        aggSucceeded += Number(statusPayload?.itemsSucceeded ?? 0);
+        aggFailed += Number(statusPayload?.itemsFailed ?? 0);
 
-      const successSkus: string[] = [];
-      const failedItems: WfsConversionFailedItem[] = [];
-      const errs: Array<{ sku?: string; type?: string; description?: string }> = [];
-      const itemDetails: any[] =
-        statusPayload?.itemDetails?.itemIngestionStatus ??
-        statusPayload?.itemDetails ??
-        [];
-      for (const d of Array.isArray(itemDetails) ? itemDetails : []) {
-        const sku: string = d?.sku ?? d?.martSku ?? "";
-        const ingestionStatus: string = String(
-          d?.ingestionStatus ?? d?.status ?? ""
-        ).toUpperCase();
-        const ingErrs: any[] =
-          d?.ingestionErrors?.ingestionError ?? d?.ingestionErrors ?? [];
-        const errList = Array.isArray(ingErrs) ? ingErrs : [];
-
-        if (ingestionStatus === "PROCESSED" || ingestionStatus === "SUCCESS") {
-          if (sku) successSkus.push(sku);
-        } else if (sku) {
-          const firstErr = errList[0];
-          failedItems.push({
-            sku,
-            status: ingestionStatus || "ERROR",
-            reason:
-              firstErr?.description ??
-              firstErr?.errorDescription ??
-              firstErr?.message ??
-              "No error description provided",
-          });
-        }
-
-        for (const e of errList) {
-          errs.push({
-            sku: sku || undefined,
+        // Capture top-level ingestionErrors that aren't tied to a SKU.
+        const topErrs: any[] =
+          statusPayload?.ingestionErrors?.ingestionError ??
+          statusPayload?.ingestionErrors ??
+          [];
+        for (const e of Array.isArray(topErrs) ? topErrs : []) {
+          allErrs.push({
             type: e?.type ?? e?.errorType,
             description: e?.description ?? e?.errorDescription ?? e?.message,
           });
+        }
+
+        const itemDetails: any[] =
+          statusPayload?.itemDetails?.itemIngestionStatus ??
+          statusPayload?.itemDetails ??
+          [];
+        const seen = new Set<string>();
+        for (const d of Array.isArray(itemDetails) ? itemDetails : []) {
+          const sku: string = d?.sku ?? d?.martSku ?? "";
+          if (sku) seen.add(sku);
+          const ingestionStatus: string = String(
+            d?.ingestionStatus ?? d?.status ?? ""
+          ).toUpperCase();
+          const ingErrs: any[] =
+            d?.ingestionErrors?.ingestionError ?? d?.ingestionErrors ?? [];
+          const errList = Array.isArray(ingErrs) ? ingErrs : [];
+
+          if (ingestionStatus === "PROCESSED" || ingestionStatus === "SUCCESS") {
+            if (sku) allSuccess.push(sku);
+          } else if (sku) {
+            const firstErr = errList[0];
+            allFailed.push({
+              sku,
+              status: ingestionStatus || "ERROR",
+              reason:
+                firstErr?.description ??
+                firstErr?.errorDescription ??
+                firstErr?.message ??
+                "No error description provided",
+            });
+          }
+
+          for (const e of errList) {
+            allErrs.push({
+              sku: sku || undefined,
+              type: e?.type ?? e?.errorType,
+              description: e?.description ?? e?.errorDescription ?? e?.message,
+            });
+          }
+        }
+        // If Walmart returned a system-level error (itemsReceived = 0) with
+        // no per-SKU details, surface that against every SKU in the group so
+        // the operator sees why they failed.
+        const fsUp = String(statusPayload?.feedStatus ?? "").toUpperCase();
+        if (
+          (fsUp === "ERROR" || fsUp === "PROCESSED_WITH_ERROR") &&
+          aggReceived === 0 &&
+          topErrs.length > 0
+        ) {
+          const desc =
+            topErrs[0]?.description ??
+            topErrs[0]?.errorDescription ??
+            topErrs[0]?.message ??
+            "Walmart rejected the feed";
+          for (const it of items) {
+            if (!seen.has(it.r.sku)) {
+              allFailed.push({
+                sku: it.r.sku,
+                status: "FEED_ERROR",
+                reason: `${desc} (subCategory=${subCategory})`,
+              });
+            }
+          }
         }
       }
 
       await supabaseAdmin
         .from("wfs_conversion_runs")
         .update({
-          feed_id: feedId,
-          status,
+          feed_id: allFeedIds.join(",") || null,
+          status: lastStatus,
           response: {
-            submit: submitRes,
-            status: statusPayload,
-            successSkus,
-            failedItems: failedItems as unknown as Record<string, unknown>[],
-            timedOut,
+            submits: allSubmits,
+            statuses: allStatuses,
+            successSkus: allSuccess,
+            failedItems: allFailed as unknown as Record<string, unknown>[],
+            preflightFailed: preflightFailed as unknown as Record<string, unknown>[],
+            timedOut: anyTimedOut,
           } as any,
         })
         .eq("id", runId);
 
-      const allFailed = [...preflightFailed, ...failedItems];
       return {
         runId,
-        feedId,
-        status,
-        submittedCount: mpItems.length,
-        itemsReceived,
-        itemsSucceeded,
-        itemsFailed: (itemsFailed ?? 0) + preflightFailed.length,
-        successSkus,
-        failedItems: allFailed,
-        ingestionErrors: errs,
-        timedOut,
+        feedId: allFeedIds[0] ?? null,
+        status: lastStatus,
+        submittedCount,
+        itemsReceived: aggReceived,
+        itemsSucceeded: aggSucceeded,
+        itemsFailed: aggFailed + preflightFailed.length,
+        successSkus: allSuccess,
+        failedItems: [...preflightFailed, ...allFailed],
+        ingestionErrors: allErrs,
+        timedOut: anyTimedOut,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2276,6 +2448,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       throw err;
     }
   });
+
 
 // ─── Import dimensions CSV ───────────────────────────────
 // Operator workflow: export UPCs → fill dims in a spreadsheet →
