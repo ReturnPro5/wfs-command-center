@@ -2882,7 +2882,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
     z
       .object({
-        batchSize: z.number().int().min(1).max(100).optional(),
+        batchSize: z.number().int().min(1).max(500).optional(),
         afterSku: z.string().optional(),
         reenrich: z.boolean().optional(),
       })
