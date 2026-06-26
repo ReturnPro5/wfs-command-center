@@ -1306,6 +1306,47 @@ const COL_ALIASES = {
   upc: ["upc", "productid"],
 } as const;
 
+const REPORT_DETAIL_FIELDS: Array<keyof ItemReportRow> = [
+  "brand",
+  "mainImageUrl",
+  "price",
+  "productType",
+  "productName",
+  "gtin",
+  "upc",
+];
+
+function mergeReportRows(base: ItemReportRow | undefined, next: ItemReportRow): ItemReportRow {
+  if (!base) return next;
+  const merged: ItemReportRow = { ...base };
+  if (!merged.fulfillment && next.fulfillment) merged.fulfillment = next.fulfillment;
+  for (const field of REPORT_DETAIL_FIELDS) {
+    if ((merged[field] === undefined || merged[field] === null || merged[field] === "") && next[field] != null && next[field] !== "") {
+      (merged as any)[field] = next[field];
+    }
+  }
+  return merged;
+}
+
+function getItemImageUrl(it: any, report?: ItemReportRow): string | undefined {
+  return String(
+    report?.mainImageUrl ??
+      it?.mainImageUrl ??
+      it?.main_image_url ??
+      it?.primaryImageUrl ??
+      it?.primaryImageURL ??
+      it?.productImageUrl ??
+      it?.productMainImageUrl ??
+      it?.imageUrl ??
+      it?.imageURL ??
+      it?.PrimaryImageURL ??
+      it?.productSecondaryImageURL ??
+      (Array.isArray(it?.images) ? (it.images[0]?.url ?? it.images[0]?.imageUrl ?? it.images[0]) : "") ??
+      (Array.isArray(it?.productImages) ? (it.productImages[0]?.url ?? it.productImages[0]?.imageUrl ?? it.productImages[0]) : "") ??
+      ""
+  ).trim() || undefined;
+}
+
 function findCol(header: string[], aliases: readonly string[]): number {
   for (const a of aliases) {
     const i = header.indexOf(a);
@@ -1363,7 +1404,7 @@ function parseFulfillmentReport(csv: string): Map<string, ItemReportRow> {
   }
   for (const row of rows.slice(1)) {
     const entry = buildReportRow(row, idx);
-    if (entry) map.set(entry.sku, entry.data);
+    if (entry) map.set(entry.sku, mergeReportRows(map.get(entry.sku), entry.data));
   }
   return map;
 }
@@ -1381,10 +1422,13 @@ function createFulfillmentReportParser() {
     if (!headerParsed) {
       delimiter = detectDelimiter(line);
       const header = parseCsvLine(line, delimiter).map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ""));
+      const shiftedHeader = header.some((h, i) => h !== (header[i - 1] ?? "") && header.indexOf(h) !== i);
       idx = indexHeader(header);
       headerParsed = true;
       if (idx.sku < 0) {
         console.warn(`[WFS:catalog] item report header missing sku column. header=${header.slice(0, 30).join("|")}`);
+      } else if (shiftedHeader) {
+        console.warn(`[WFS:catalog] item report header has duplicate names; CSV may be malformed. header=${header.slice(0, 55).join("|")}`);
       } else {
         console.log(`[WFS:catalog] item report cols sku=${idx.sku} fulfillment=${idx.fulfillment} brand=${idx.brand} image=${idx.image} price=${idx.price} productType=${idx.productType}`);
       }
@@ -1393,7 +1437,7 @@ function createFulfillmentReportParser() {
     if (!idx || idx.sku < 0) return;
     const row = parseCsvLine(line, delimiter);
     const entry = buildReportRow(row, idx);
-    if (entry) map.set(entry.sku, entry.data);
+    if (entry) map.set(entry.sku, mergeReportRows(map.get(entry.sku), entry.data));
   }
 
   return {
@@ -1466,12 +1510,17 @@ function getReadyReportRequestId(payload: any): string | null {
     payload?.elements ??
     [];
   const rows = Array.isArray(list) ? list : [list].filter(Boolean);
-  for (const row of rows) {
+  const readyRows = rows.filter((row) => {
     const status = String(row?.status ?? row?.requestStatus ?? "").toUpperCase();
-    if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(status)) {
-      const id = getReportRequestId(row);
-      if (id) return id;
-    }
+    return /READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(status) && getReportRequestId(row);
+  });
+  const preferred =
+    readyRows.find((row) => String(row?.reportVersion ?? "").toLowerCase() === "v6") ??
+    readyRows.find((row) => /scheduler|sc/i.test(String(row?.src ?? ""))) ??
+    readyRows[0];
+  if (preferred) {
+    const id = getReportRequestId(preferred);
+    if (id) return id;
   }
   return null;
 }
@@ -1634,7 +1683,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
           publishedStatus: String(it.publishedStatus ?? it.published_status ?? ""),
           fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
           brand: report?.brand,
-          mainImageUrl: report?.mainImageUrl,
+          mainImageUrl: getItemImageUrl(it, report),
           price: report?.price ?? null,
           productType: report?.productType,
         };
@@ -1703,7 +1752,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, product_type, enrichment_status, enriched_at")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
@@ -1724,6 +1773,10 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           publishedStatus: r.published_status ?? "",
           fulfillment: r.fulfillment ?? "Unknown",
           category: cat,
+          brand: r.brand ?? "",
+          mainImageUrl: r.main_image_url ?? "",
+          price: typeof r.price === "number" ? r.price : r.price == null ? null : Number(r.price),
+          productType: r.product_type ?? "",
           enrichmentStatus: r.enrichment_status ?? "pending",
           enrichedAt: r.enriched_at ?? null,
         });
@@ -2072,7 +2125,7 @@ async function getCatalogPageInternal(
         fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
         category: String(it.category ?? it.productType ?? it.primaryCategory ?? report?.productType ?? ""),
         brand: report?.brand,
-        mainImageUrl: report?.mainImageUrl,
+        mainImageUrl: getItemImageUrl(it, report),
         price: report?.price ?? null,
         productType: report?.productType,
       };
