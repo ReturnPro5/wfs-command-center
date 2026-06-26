@@ -273,10 +273,10 @@ export async function createItemReportRequest(): Promise<any> {
     "WM_MARKET": "us",
     "WM_GLOBAL_VERSION": "3.1",
   };
-  async function postItemReport(path: string, includeVersion: boolean, filtered: boolean) {
+  async function postItemReport(path: string, reportVersion: "v4" | "v6" | null, filtered: boolean) {
     const params = new URLSearchParams({
       reportType: "ITEM",
-      ...(includeVersion ? { reportVersion: "v4" } : {}),
+      ...(reportVersion ? { reportVersion } : {}),
     });
     const body = filtered
       ? {
@@ -290,14 +290,16 @@ export async function createItemReportRequest(): Promise<any> {
     });
   }
   try {
-    return await postItemReport("/v3/reports/reportRequests", true, true);
+    // v6 is the report version that carries Primary Image URL for listings
+    // where /v3/items/{sku} only returns offer-level fields.
+    return await postItemReport("/v3/reports/reportRequests", "v6", false);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (/404|CONTENT_NOT_FOUND/i.test(msg)) return postItemReport("/v3/reports/requests", "v6", false);
+    if (/reportVersion|version/i.test(msg)) return postItemReport("/v3/reports/reportRequests", null, true);
     if (/excludeColumns|column|filter|payload|body|400/i.test(msg)) {
-      return postItemReport("/v3/reports/reportRequests", true, false);
+      return postItemReport("/v3/reports/reportRequests", "v4", false);
     }
-    if (/404|CONTENT_NOT_FOUND/i.test(msg)) return postItemReport("/v3/reports/requests", true, true);
-    if (/reportVersion|version/i.test(msg)) return postItemReport("/v3/reports/reportRequests", false, true);
     throw err;
   }
 }
@@ -317,8 +319,24 @@ export async function getReportRequestStatus(requestId: string): Promise<any> {
 
 export async function listItemReportRequests(): Promise<any> {
   const headers = { "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" };
-  const params = new URLSearchParams({ reportType: "ITEM", reportVersion: "v4" });
-  return walmartFetch<any>(`/v3/reports/reportRequests?${params}`, { headers });
+  async function list(reportVersion: "v6" | "v4" | null) {
+    const params = new URLSearchParams({
+      reportType: "ITEM",
+      ...(reportVersion ? { reportVersion } : {}),
+    });
+    return walmartFetch<any>(`/v3/reports/reportRequests?${params}`, { headers });
+  }
+  try {
+    return await list("v6");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/reportVersion|version|400/i.test(msg)) return list(null);
+    if (/404|CONTENT_NOT_FOUND/i.test(msg)) {
+      const params = new URLSearchParams({ reportType: "ITEM", reportVersion: "v6" });
+      return walmartFetch<any>(`/v3/reports/requests?${params}`, { headers });
+    }
+    return list("v4");
+  }
 }
 
 export async function downloadReport(requestId: string): Promise<{ body: string; contentType: string }> {

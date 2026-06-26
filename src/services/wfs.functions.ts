@@ -2395,7 +2395,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         preflightFailed.push({
           sku: r.sku,
           status: "MISSING_FIELDS",
-          reason: `Missing required field(s): ${missing.join(", ")} — fill via Import CSV`,
+          reason: `Missing required field(s): ${missing.join(", ")} — re-sync/re-enrich or fill via Import CSV`,
         });
         continue;
       }
@@ -2791,6 +2791,45 @@ export const importDimensions = createServerFn({ method: "POST" })
     let updated = 0;
     let skipped = 0;
 
+    const existingBySku = new Map<string, any>();
+    const uniqueSkus = Array.from(new Set(data.rows.map((row) => row.sku)));
+    for (let i = 0; i < uniqueSkus.length; i += 1000) {
+      const { data: existing, error: existingErr } = await supabaseAdmin
+        .from("catalog_items")
+        .select("sku, brand, manufacturer, main_image_url, price, product_type, country_of_origin, shipping_weight, shipping_length, shipping_width, shipping_height")
+        .in("sku", uniqueSkus.slice(i, i + 1000));
+      if (existingErr) throw new Error(`catalog lookup failed: ${existingErr.message}`);
+      for (const row of existing ?? []) existingBySku.set((row as any).sku, row);
+    }
+
+    const finalValue = (patch: Record<string, unknown>, current: any, key: string) =>
+      patch[key] !== undefined ? patch[key] : current?.[key];
+
+    const isReadyAfterPatch = (patch: Record<string, unknown>, current: any): boolean => {
+      const brand = String(finalValue(patch, current, "brand") ?? "").trim();
+      const manufacturer = String(finalValue(patch, current, "manufacturer") ?? "").trim() || brand;
+      const image = String(finalValue(patch, current, "main_image_url") ?? "").trim();
+      const country = String(finalValue(patch, current, "country_of_origin") ?? "").trim();
+      const productType = String(finalValue(patch, current, "product_type") ?? "").trim();
+      const price = Number(finalValue(patch, current, "price") ?? 0);
+      const weight = Number(finalValue(patch, current, "shipping_weight") ?? 0);
+      const length = Number(finalValue(patch, current, "shipping_length") ?? 0);
+      const width = Number(finalValue(patch, current, "shipping_width") ?? 0);
+      const height = Number(finalValue(patch, current, "shipping_height") ?? 0);
+      return Boolean(
+        brand &&
+          manufacturer &&
+          image &&
+          country &&
+          productType &&
+          price > 0 &&
+          weight > 0 &&
+          length > 0 &&
+          width > 0 &&
+          height > 0
+      );
+    };
+
     const tasks = data.rows.map((row) => async () => {
       const patch: Record<string, unknown> = {};
       // Dims are optional now — we accept partial enrichment rows. The
@@ -2814,15 +2853,7 @@ export const importDimensions = createServerFn({ method: "POST" })
         return;
       }
       patch.enriched_at = new Date().toISOString();
-      // Status flips to "enriched" only when dims are all set; otherwise
-      // leave whatever status was there so the submit preflight can still
-      // catch missing fields downstream.
-      const hasAllDims =
-        (row.length ?? 0) > 0 &&
-        (row.width ?? 0) > 0 &&
-        (row.height ?? 0) > 0 &&
-        (row.weight ?? 0) > 0;
-      if (hasAllDims) patch.enrichment_status = "enriched";
+      patch.enrichment_status = isReadyAfterPatch(patch, existingBySku.get(row.sku)) ? "enriched" : "partial";
 
       const { error, count } = await supabaseAdmin
         .from("catalog_items")
@@ -2921,7 +2952,7 @@ const REQUIRED_FOR_WFS: Array<keyof EnrichedFields> = [
   "brand",
   "main_image_url",
   "price",
-  "sub_category",
+  "product_type",
   "country_of_origin",
   "shipping_weight",
   "shipping_length",
@@ -2950,7 +2981,7 @@ function toNumberOrNull(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseEnrichedFields(raw: any): EnrichedFields {
+function parseEnrichedFields(raw: any, report?: ItemReportRow): EnrichedFields {
   const payload = raw?.payload ?? raw ?? {};
   const candidate =
     (Array.isArray(payload?.ItemResponse) ? payload.ItemResponse[0] : payload?.ItemResponse) ??
@@ -2959,11 +2990,11 @@ function parseEnrichedFields(raw: any): EnrichedFields {
     payload;
   const c = candidate ?? {};
   const attrs = c?.additionalProductAttributes ?? c?.AdditionalProductAttributes;
-  const priceAmt = toNumberOrNull(c?.price?.amount ?? c?.price);
-  const currency = String(c?.price?.currency ?? c?.currency ?? "USD") || "USD";
+  const priceAmt = toNumberOrNull(c?.price?.amount ?? c?.price) ?? report?.price ?? null;
+  const currency = String(c?.price?.currency ?? c?.currency ?? report?.currency ?? "USD") || "USD";
 
   return {
-    brand: String(c?.brand ?? extractAdditionalAttr(attrs, ["brand"]) ?? ""),
+    brand: String(c?.brand ?? report?.brand ?? extractAdditionalAttr(attrs, ["brand"]) ?? ""),
     manufacturer: String(
       c?.manufacturer ??
         extractAdditionalAttr(attrs, ["manufacturer", "manufacturer_name"]) ??
@@ -2973,15 +3004,7 @@ function parseEnrichedFields(raw: any): EnrichedFields {
       c?.shortDescription ?? c?.shortdescription ?? c?.productDescription ?? ""
     ),
     main_image_url: String(
-      c?.mainImageUrl ??
-        c?.productImageUrl ??
-        c?.productMainImageUrl ??
-        c?.imageUrl ??
-        c?.primaryImage ??
-        c?.primaryImageUrl ??
-        (Array.isArray(c?.images) ? (c.images[0]?.url ?? c.images[0]?.imageUrl ?? c.images[0]) : "") ??
-        (Array.isArray(c?.productImages) ? (c.productImages[0]?.url ?? c.productImages[0]) : "") ??
-        c?.productSecondaryImageURL ??
+      getItemImageUrl(c, report) ??
         extractAdditionalAttr(attrs, [
           "main_image_url",
           "mainimageurl",
@@ -2993,8 +3016,8 @@ function parseEnrichedFields(raw: any): EnrichedFields {
     ),
     price: priceAmt,
     currency,
-    product_type: String(c?.productType ?? c?.productSubType ?? ""),
-    category: String(c?.productCategory ?? c?.category ?? ""),
+    product_type: String(c?.productType ?? c?.productSubType ?? report?.productType ?? ""),
+    category: String(c?.productCategory ?? c?.category ?? report?.productType ?? ""),
     sub_category: String(
       c?.subCategory ??
         extractAdditionalAttr(attrs, ["sub_category", "subcategory"]) ??
@@ -3033,6 +3056,44 @@ function parseEnrichedFields(raw: any): EnrichedFields {
   };
 }
 
+function hasEnrichedValue(v: unknown): boolean {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (typeof v === "number") return Number.isFinite(v) && v > 0;
+  return true;
+}
+
+function existingEnrichedFields(row: any): EnrichedFields {
+  return {
+    brand: String(row?.brand ?? ""),
+    manufacturer: String(row?.manufacturer ?? ""),
+    short_description: String(row?.short_description ?? ""),
+    main_image_url: String(row?.main_image_url ?? ""),
+    price: toNumberOrNull(row?.price),
+    currency: String(row?.currency ?? "USD") || "USD",
+    product_type: String(row?.product_type ?? ""),
+    category: String(row?.category ?? ""),
+    sub_category: String(row?.sub_category ?? ""),
+    country_of_origin: String(row?.country_of_origin ?? ""),
+    shipping_weight: toNumberOrNull(row?.shipping_weight),
+    shipping_weight_unit: String(row?.shipping_weight_unit ?? "lb") || "lb",
+    shipping_length: toNumberOrNull(row?.shipping_length),
+    shipping_width: toNumberOrNull(row?.shipping_width),
+    shipping_height: toNumberOrNull(row?.shipping_height),
+    shipping_dim_unit: String(row?.shipping_dim_unit ?? "in") || "in",
+  };
+}
+
+function mergeEnrichedFields(next: EnrichedFields, previous: EnrichedFields): EnrichedFields {
+  const merged = { ...previous } as EnrichedFields;
+  for (const key of Object.keys(next) as Array<keyof EnrichedFields>) {
+    if (hasEnrichedValue(next[key])) {
+      (merged as any)[key] = next[key];
+    }
+  }
+  return merged;
+}
+
 function classifyEnrichment(fields: EnrichedFields): EnrichmentStatus {
   for (const k of REQUIRED_FOR_WFS) {
     const v = fields[k];
@@ -3065,9 +3126,11 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const batchSize = data.batchSize ?? 200;
     await getWalmartAccessToken();
 
+    const reportMapPromise = getItemReportFulfillmentMap();
+
     let query = supabaseAdmin
       .from("catalog_items")
-      .select("sku")
+      .select("sku, brand, manufacturer, short_description, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit")
       .order("sku", { ascending: true })
       .limit(batchSize);
     if (!data.reenrich) {
@@ -3077,7 +3140,9 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
 
     const { data: rows, error } = await query;
     if (error) throw new Error(`enrichment read failed: ${error.message}`);
-    const skus = (rows ?? []).map((r: any) => r.sku);
+    const rowList = (rows ?? []) as any[];
+    const skus = rowList.map((r: any) => r.sku);
+    const reportMap = await reportMapPromise;
 
     let enriched = 0;
     let partial = 0;
@@ -3089,10 +3154,14 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     async function worker() {
       while (idx < skus.length) {
         const i = idx++;
-        const sku = skus[i];
+        const existingRow = rowList[i];
+        const sku = existingRow.sku;
         try {
           const raw = await walmartApi.getItem(sku);
-          const fields = parseEnrichedFields(raw);
+          const fields = mergeEnrichedFields(
+            parseEnrichedFields(raw, reportMap.get(sku)),
+            existingEnrichedFields(existingRow)
+          );
           const status = classifyEnrichment(fields);
           const { error: uErr } = await supabaseAdmin
             .from("catalog_items")
