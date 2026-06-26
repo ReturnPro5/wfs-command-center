@@ -1476,12 +1476,12 @@ function getReadyReportRequestId(payload: any): string | null {
   return null;
 }
 
-async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentType>> {
+async function getItemReportFulfillmentMap(): Promise<Map<string, ItemReportRow>> {
   if (fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
     return fulfillmentReportCache.promise;
   }
 
-  const promise = (async () => {
+  const promise = (async (): Promise<Map<string, ItemReportRow>> => {
     try {
       if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
         let requestId: string | null = null;
@@ -1514,13 +1514,15 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
 
       const downloaded = await walmartApi.downloadReportFile(requestId);
       const map = await parseFulfillmentReportFile(downloaded.bytes, downloaded.contentType);
-      if (map.size === 0) throw new Error("item report did not include fulfillment rows");
-      console.log(`[WFS:catalog] item report fulfillment rows=${map.size}`);
+      if (map.size === 0) throw new Error("item report did not include any rows");
+      const withBrand = Array.from(map.values()).filter((r) => r.brand).length;
+      const withImage = Array.from(map.values()).filter((r) => r.mainImageUrl).length;
+      console.log(`[WFS:catalog] item report rows=${map.size} brand=${withBrand} image=${withImage}`);
       fulfillmentReportRequest = null;
       return map;
     } catch (err) {
-      console.warn("[WFS:catalog] item report fulfillment unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
-      return new Map<string, FulfillmentType>();
+      console.warn("[WFS:catalog] item report unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
+      return new Map<string, ItemReportRow>();
     }
   })();
 
@@ -1528,6 +1530,7 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, FulfillmentTyp
   promise.catch(() => { fulfillmentReportCache = null; });
   return promise;
 }
+
 
 export interface CatalogPage {
   items: CatalogIdentifier[];
