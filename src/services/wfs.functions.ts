@@ -2353,7 +2353,7 @@ export const importDimensions = createServerFn({ method: "POST" })
       }
       const { error, count } = await supabaseAdmin
         .from("catalog_items")
-        .update(patch, { count: "exact" })
+        .update(patch as any, { count: "exact" })
         .eq("sku", row.sku);
       if (error) {
         errors.push({ sku: row.sku, reason: error.message });
