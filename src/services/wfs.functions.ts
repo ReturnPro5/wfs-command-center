@@ -2248,6 +2248,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         })
         .eq("id", runId);
 
+      const allFailed = [...preflightFailed, ...failedItems];
       return {
         runId,
         feedId,
@@ -2255,9 +2256,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         submittedCount: mpItems.length,
         itemsReceived,
         itemsSucceeded,
-        itemsFailed,
+        itemsFailed: (itemsFailed ?? 0) + preflightFailed.length,
         successSkus,
-        failedItems,
+        failedItems: allFailed,
         ingestionErrors: errs,
         timedOut,
       };
