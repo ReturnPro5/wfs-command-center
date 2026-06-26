@@ -2188,7 +2188,10 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       weight: number;
       isHazmat: boolean;
       gtin: string;
+      brand: string;
+      manufacturer: string;
     };
+
     const ready: Ready[] = [];
 
     const slug = (s: string) =>
