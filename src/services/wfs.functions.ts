@@ -2921,7 +2921,7 @@ const REQUIRED_FOR_WFS: Array<keyof EnrichedFields> = [
   "brand",
   "main_image_url",
   "price",
-  "sub_category",
+  "product_type",
   "country_of_origin",
   "shipping_weight",
   "shipping_length",
