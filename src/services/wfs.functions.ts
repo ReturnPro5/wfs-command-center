@@ -2882,14 +2882,14 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
     z
       .object({
-        batchSize: z.number().int().min(1).max(100).optional(),
+        batchSize: z.number().int().min(1).max(500).optional(),
         afterSku: z.string().optional(),
         reenrich: z.boolean().optional(),
       })
       .parse(data ?? {})
   )
   .handler(async ({ data }): Promise<EnrichCatalogResult> => {
-    const batchSize = data.batchSize ?? 25;
+    const batchSize = data.batchSize ?? 200;
     await getWalmartAccessToken();
 
     let query = supabaseAdmin
@@ -2911,7 +2911,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     let failed = 0;
     const now = new Date().toISOString();
 
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 16;
     let idx = 0;
     async function worker() {
       while (idx < skus.length) {
