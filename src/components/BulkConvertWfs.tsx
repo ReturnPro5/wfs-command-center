@@ -39,8 +39,20 @@ type SdsFilter = "ALL" | SdsRequirement;
 
 
 
+// Convert-to-WFS template columns. SKU is the canonical key; UPC is
+// included as a fallback identifier so a Walmart-style "UPC only" import
+// also works. The remaining columns map 1:1 to the SupplierItem schema
+// fields Walmart requires for OMNI_WFS.
 const DIM_TEMPLATE_HEADER = [
+  "SKU",
   "UPC",
+  "ProductName",
+  "ProductType",
+  "Brand",
+  "Manufacturer",
+  "MainImageUrl",
+  "Price",
+  "CountryOfOrigin",
   "DimensionD",
   "DimensionW",
   "DimensionH",
@@ -61,7 +73,15 @@ function exportDimensionsTemplate(rows: Row[]) {
   for (const r of rows) {
     lines.push(
       [
+        csvEscapeId(r.sku),
         csvEscapeId(r.upc),
+        csvEscape(r.productName),
+        csvEscape(r.category ?? ""),
+        "",
+        "",
+        "",
+        "",
+        "",
         "",
         "",
         "",
@@ -75,7 +95,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `wfs-dimensions-template-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `wfs-convert-template-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -148,6 +168,11 @@ interface ParsedDimRow {
   height: number | null;
   weight: number | null;
   countryOfOrigin?: string;
+  brand?: string;
+  manufacturer?: string;
+  mainImageUrl?: string;
+  productType?: string;
+  price?: number | null;
 }
 
 function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: string[] } {
@@ -159,24 +184,23 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
     header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
   const iSku = idx(["sku"]);
   const iUpc = idx(["upc"]);
-  // Accept either "Length / Width / Height / Weight" OR Walmart's
-  // "DimensionD / DimensionW / DimensionH / ShippingWeight" headers.
   const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
   const iWid = idx(["width", "dimensionw", "dimension w"]);
   const iHei = idx(["height", "dimensionh", "dimension h"]);
   const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
-  const iCoo = idx(["country of origin", "country_of_origin", "country"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country"]);
+  const iBrand = idx(["brand"]);
+  const iMfr = idx(["manufacturer", "mfr"]);
+  const iImg = idx(["mainimageurl", "main image url", "imageurl", "image"]);
+  const iPt = idx(["producttype", "product type", "category"]);
+  const iPrice = idx(["price"]);
   if (iSku < 0 && iUpc < 0) {
     errors.push("missing SKU or UPC column");
     return { rows: [], errors };
   }
-  if (iLen < 0 || iWid < 0 || iHei < 0 || iWgt < 0) {
-    errors.push("missing one or more dimension columns (need DimensionD/W/H + ShippingWeight, or Length/Width/Height/Weight)");
-    return { rows: [], errors };
-  }
   const num = (s: string | undefined): number | null => {
     if (s == null) return null;
-    const t = s.replace(/[",=']/g, "").trim();
+    const t = s.replace(/[",=$']/g, "").trim();
     if (!t) return null;
     const n = Number(t);
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -192,11 +216,16 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
     rows.push({
       sku: sku || undefined,
       upc: upc || undefined,
-      length: num(cells[iLen]),
-      width: num(cells[iWid]),
-      height: num(cells[iHei]),
-      weight: num(cells[iWgt]),
-      countryOfOrigin: iCoo >= 0 ? (cells[iCoo] ?? "").trim() || undefined : undefined,
+      length: iLen >= 0 ? num(cells[iLen]) : null,
+      width: iWid >= 0 ? num(cells[iWid]) : null,
+      height: iHei >= 0 ? num(cells[iHei]) : null,
+      weight: iWgt >= 0 ? num(cells[iWgt]) : null,
+      countryOfOrigin: iCoo >= 0 ? clean(cells[iCoo]) || undefined : undefined,
+      brand: iBrand >= 0 ? clean(cells[iBrand]) || undefined : undefined,
+      manufacturer: iMfr >= 0 ? clean(cells[iMfr]) || undefined : undefined,
+      mainImageUrl: iImg >= 0 ? clean(cells[iImg]) || undefined : undefined,
+      productType: iPt >= 0 ? clean(cells[iPt]) || undefined : undefined,
+      price: iPrice >= 0 ? num(cells[iPrice]) : null,
     });
   }
   return { rows, errors };
@@ -411,18 +440,37 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         upcToSkus.set(u, arr);
       }
 
-      const resolved: Array<{
+      type ResolvedRow = {
         sku: string;
         length: number | null;
         width: number | null;
         height: number | null;
         weight: number | null;
         countryOfOrigin?: string;
-      }> = [];
+        brand?: string;
+        manufacturer?: string;
+        mainImageUrl?: string;
+        productType?: string;
+        price?: number | null;
+      };
+      const resolved: ResolvedRow[] = [];
+      const rowFor = (sku: string, r: ParsedDimRow): ResolvedRow => ({
+        sku,
+        length: r.length,
+        width: r.width,
+        height: r.height,
+        weight: r.weight,
+        countryOfOrigin: r.countryOfOrigin,
+        brand: r.brand,
+        manufacturer: r.manufacturer,
+        mainImageUrl: r.mainImageUrl,
+        productType: r.productType,
+        price: r.price,
+      });
       let unresolved = 0;
       for (const r of parsed) {
         if (r.sku) {
-          resolved.push({ sku: r.sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
+          resolved.push(rowFor(r.sku, r));
           continue;
         }
         const u = (r.upc ?? "").replace(/[^0-9]/g, "");
@@ -431,11 +479,10 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           unresolved++;
           continue;
         }
-        for (const sku of skus) {
-          resolved.push({ sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
-        }
+        for (const sku of skus) resolved.push(rowFor(sku, r));
       }
       if (resolved.length === 0) throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
+
 
       // Larger batches + parallel server calls. Each server call now fans
       // out internally with a concurrency pool, so we keep client parallelism
@@ -610,16 +657,18 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         )}
       </section>
 
-      {/* Dimensions workflow */}
+      {/* WFS enrichment workflow */}
       <section className="rounded-md border border-border bg-secondary/20 p-3 space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div>
-            <h3 className="text-sm font-semibold">Dimensions workflow</h3>
+            <h3 className="text-sm font-semibold">WFS convert enrichment</h3>
             <p className="text-xs text-muted-foreground">
-              Export UPCs for the items currently filtered below, fill in
-              Length / Width / Height / Weight in a spreadsheet, then upload the
-              same file. SKUs without dimensions are flagged as
-              <em className="not-italic"> No dimensions</em> when you submit.
+              Walmart's OMNI_WFS feed requires <strong>Brand, Manufacturer,
+              MainImageUrl, Price, ProductType, CountryOfOrigin</strong> and
+              shipping <strong>DimensionD / W / H + ShippingWeight</strong>{" "}
+              per SKU. Export the template, fill the blank columns in a
+              spreadsheet, then re-upload — missing fields are reported per-SKU
+              on submit.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -628,7 +677,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
               disabled={filtered.length === 0}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
-              Export UPCs CSV ({filtered.length.toLocaleString()})
+              Export WFS template ({filtered.length.toLocaleString()})
             </button>
             <input
               ref={dimFileRef}
@@ -649,11 +698,12 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
                 ? importProgress
                   ? `Importing… ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()}`
                   : "Importing…"
-                : "Import dimensions CSV"}
+                : "Import WFS CSV"}
 
             </button>
           </div>
         </div>
+
         {importResult && (
           <div className="space-y-1 text-xs">
             <div className="flex flex-wrap gap-x-4 gap-y-1">
