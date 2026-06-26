@@ -39,6 +39,168 @@ type SdsFilter = "ALL" | SdsRequirement;
 
 const RENDER_CAP = 2000;
 
+const DIM_TEMPLATE_HEADER = [
+  "SKU",
+  "UPC",
+  "GTIN",
+  "Product Name",
+  "Length (in)",
+  "Width (in)",
+  "Height (in)",
+  "Weight (lb)",
+  "Country Of Origin",
+] as const;
+
+function csvEscape(v: string): string {
+  return `"${(v ?? "").replace(/"/g, '""')}"`;
+}
+function csvEscapeId(v: string): string {
+  const s = (v ?? "").replace(/"/g, '""');
+  return s ? `="${s}"` : `""`;
+}
+
+function exportDimensionsTemplate(rows: Row[]) {
+  const lines = [DIM_TEMPLATE_HEADER.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvEscape(r.sku),
+        csvEscapeId(r.upc),
+        csvEscapeId(r.gtin),
+        csvEscape(r.productName),
+        "",
+        "",
+        "",
+        "",
+        "",
+      ].join(",")
+    );
+  }
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `wfs-dimensions-template-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Minimal CSV parser supporting quoted fields, escaped quotes, and ="..." cells.
+function parseCsv(text: string): string[][] {
+  const out: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let i = 0;
+  let inQuotes = false;
+  const src = text.replace(/\r\n?/g, "\n");
+  while (i < src.length) {
+    const c = src[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (src[i + 1] === '"') {
+          cell += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      cell += c;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+    if (c === ",") {
+      row.push(cell);
+      cell = "";
+      i++;
+      continue;
+    }
+    if (c === "\n") {
+      row.push(cell);
+      out.push(row);
+      row = [];
+      cell = "";
+      i++;
+      continue;
+    }
+    if (c === "=" && src[i + 1] === '"') {
+      // Skip Excel formula prefix; the next quote starts the quoted cell.
+      i++;
+      continue;
+    }
+    cell += c;
+    i++;
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    out.push(row);
+  }
+  return out.filter((r) => r.length > 1 || (r[0] && r[0].trim() !== ""));
+}
+
+interface ParsedDimRow {
+  sku: string;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+  weight: number | null;
+  countryOfOrigin?: string;
+}
+
+function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: string[] } {
+  const errors: string[] = [];
+  const grid = parseCsv(text);
+  if (grid.length === 0) return { rows: [], errors: ["empty file"] };
+  const header = grid[0].map((h) => h.trim().toLowerCase());
+  const idx = (names: string[]) =>
+    header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
+  const iSku = idx(["sku"]);
+  const iLen = idx(["length"]);
+  const iWid = idx(["width"]);
+  const iHei = idx(["height"]);
+  const iWgt = idx(["weight"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "country"]);
+  if (iSku < 0) {
+    errors.push("missing SKU column");
+    return { rows: [], errors };
+  }
+  if (iLen < 0 || iWid < 0 || iHei < 0 || iWgt < 0) {
+    errors.push("missing one or more of Length / Width / Height / Weight columns");
+    return { rows: [], errors };
+  }
+  const num = (s: string | undefined): number | null => {
+    if (s == null) return null;
+    const t = s.replace(/[",=]/g, "").trim();
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const rows: ParsedDimRow[] = [];
+  for (let r = 1; r < grid.length; r++) {
+    const cells = grid[r];
+    const sku = (cells[iSku] ?? "").replace(/[",=]/g, "").trim();
+    if (!sku) continue;
+    rows.push({
+      sku,
+      length: num(cells[iLen]),
+      width: num(cells[iWid]),
+      height: num(cells[iHei]),
+      weight: num(cells[iWgt]),
+      countryOfOrigin: iCoo >= 0 ? (cells[iCoo] ?? "").trim() || undefined : undefined,
+    });
+  }
+  return { rows, errors };
+}
+
+
 function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok" | "warn" | "bad" }) {
   const toneCls =
     tone === "ok"
