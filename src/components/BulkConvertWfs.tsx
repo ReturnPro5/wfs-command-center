@@ -40,15 +40,11 @@ type SdsFilter = "ALL" | SdsRequirement;
 const RENDER_CAP = 2000;
 
 const DIM_TEMPLATE_HEADER = [
-  "SKU",
   "UPC",
-  "GTIN",
-  "Product Name",
-  "Length (in)",
-  "Width (in)",
-  "Height (in)",
-  "Weight (lb)",
-  "Country Of Origin",
+  "DimensionD",
+  "DimensionW",
+  "DimensionH",
+  "ShippingWeight",
 ] as const;
 
 function csvEscape(v: string): string {
@@ -56,7 +52,8 @@ function csvEscape(v: string): string {
 }
 function csvEscapeId(v: string): string {
   const s = (v ?? "").replace(/"/g, '""');
-  return s ? `="${s}"` : `""`;
+  // Leading apostrophe prefix forces Excel/Sheets to treat as text.
+  return s ? `'${s}` : "";
 }
 
 function exportDimensionsTemplate(rows: Row[]) {
@@ -64,11 +61,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   for (const r of rows) {
     lines.push(
       [
-        csvEscape(r.sku),
-        csvEscapeId(r.upc),
-        csvEscapeId(r.gtin),
-        csvEscape(r.productName),
-        "",
+        csvEscape(csvEscapeId(r.upc)),
         "",
         "",
         "",
@@ -86,6 +79,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
 
 // Minimal CSV parser supporting quoted fields, escaped quotes, and ="..." cells.
 function parseCsv(text: string): string[][] {
