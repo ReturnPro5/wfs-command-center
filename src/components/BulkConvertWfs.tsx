@@ -795,10 +795,10 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
             <Th>
               <input
                 type="checkbox"
-                checked={allFilteredSelected}
-                onChange={toggleAllFiltered}
+                checked={allPageSelected}
+                onChange={toggleAllPage}
                 className="h-4 w-4 cursor-pointer accent-primary"
-                aria-label="Select all filtered"
+                aria-label="Select all on this page"
               />
             </Th>
             <Th>SKU</Th>
