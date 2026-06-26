@@ -657,16 +657,18 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         )}
       </section>
 
-      {/* Dimensions workflow */}
+      {/* WFS enrichment workflow */}
       <section className="rounded-md border border-border bg-secondary/20 p-3 space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div>
-            <h3 className="text-sm font-semibold">Dimensions workflow</h3>
+            <h3 className="text-sm font-semibold">WFS convert enrichment</h3>
             <p className="text-xs text-muted-foreground">
-              Export UPCs for the items currently filtered below, fill in
-              Length / Width / Height / Weight in a spreadsheet, then upload the
-              same file. SKUs without dimensions are flagged as
-              <em className="not-italic"> No dimensions</em> when you submit.
+              Walmart's OMNI_WFS feed requires <strong>Brand, Manufacturer,
+              MainImageUrl, Price, ProductType, CountryOfOrigin</strong> and
+              shipping <strong>DimensionD / W / H + ShippingWeight</strong>{" "}
+              per SKU. Export the template, fill the blank columns in a
+              spreadsheet, then re-upload — missing fields are reported per-SKU
+              on submit.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -675,7 +677,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
               disabled={filtered.length === 0}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
-              Export UPCs CSV ({filtered.length.toLocaleString()})
+              Export WFS template ({filtered.length.toLocaleString()})
             </button>
             <input
               ref={dimFileRef}
@@ -696,11 +698,12 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
                 ? importProgress
                   ? `Importing… ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()}`
                   : "Importing…"
-                : "Import dimensions CSV"}
+                : "Import WFS CSV"}
 
             </button>
           </div>
         </div>
+
         {importResult && (
           <div className="space-y-1 text-xs">
             <div className="flex flex-wrap gap-x-4 gap-y-1">
