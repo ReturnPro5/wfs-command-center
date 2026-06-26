@@ -37,7 +37,7 @@ type Row = CatalogIdentifier & { sds: SdsClassification };
 
 type SdsFilter = "ALL" | SdsRequirement;
 
-const RENDER_CAP = 2000;
+
 
 const DIM_TEMPLATE_HEADER = [
   "UPC",
@@ -289,8 +289,17 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     return Array.from(c.entries()).sort((a, b) => b[1] - a[1]);
   }, [eligibleAll]);
 
-  const visible = filtered.slice(0, RENDER_CAP);
-  const truncated = filtered.length > RENDER_CAP;
+  const [pageSize, setPageSize] = useState<number>(500);
+  const [page, setPage] = useState<number>(1);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  // Clamp page when filters or pageSize change.
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+  const pageStart = (page - 1) * pageSize;
+  const pageEnd = Math.min(pageStart + pageSize, filtered.length);
+  const visible = filtered.slice(pageStart, pageEnd);
+  
 
   const selectedFlagged = useMemo(() => {
     let n = 0;
@@ -301,8 +310,8 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     return n;
   }, [selected, eligibleAll]);
 
-  const allFilteredSelected =
-    filtered.length > 0 && filtered.every((r) => selected.has(r.sku));
+  const allPageSelected =
+    visible.length > 0 && visible.every((r) => selected.has(r.sku));
 
   function toggleOne(sku: string) {
     setSelected((prev) => {
@@ -313,17 +322,24 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     });
   }
 
-  function toggleAllFiltered() {
+  function toggleAllPage() {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (allFilteredSelected) {
-        for (const r of filtered) next.delete(r.sku);
+      if (allPageSelected) {
+        for (const r of visible) next.delete(r.sku);
       } else {
-        for (const r of filtered) next.add(r.sku);
+        for (const r of visible) next.add(r.sku);
       }
       return next;
     });
   }
+
+  function selectPageOnly() {
+    const next = new Set<string>();
+    for (const r of visible) next.add(r.sku);
+    setSelected(next);
+  }
+
 
   async function runConvert() {
     setSubmitting(true);
@@ -773,16 +789,87 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         </section>
       )}
 
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <span>
+          {filtered.length === 0
+            ? "0 results"
+            : `Showing ${(pageStart + 1).toLocaleString()}–${pageEnd.toLocaleString()} of ${filtered.length.toLocaleString()}`}
+        </span>
+        <div className="flex-1" />
+        <label className="flex items-center gap-1">
+          Per page
+          <Select value={String(pageSize)} onValueChange={(v) => { setPageSize(Number(v)); setPage(1); }}>
+            <SelectTrigger className="h-8 w-24 bg-secondary border-border">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="100">100</SelectItem>
+              <SelectItem value="250">250</SelectItem>
+              <SelectItem value="500">500</SelectItem>
+              <SelectItem value="1000">1000</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+        <button
+          onClick={selectPageOnly}
+          disabled={visible.length === 0}
+          className="rounded border border-border bg-secondary px-2 py-1 hover:bg-secondary/70 disabled:opacity-50"
+          title="Replace current selection with the SKUs on this page"
+        >
+          Select this page ({visible.length})
+        </button>
+        <button
+          onClick={() => setSelected(new Set())}
+          disabled={selected.size === 0}
+          className="rounded border border-border bg-secondary px-2 py-1 hover:bg-secondary/70 disabled:opacity-50"
+        >
+          Clear selection
+        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setPage(1)}
+            disabled={page <= 1}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            «
+          </button>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            ‹
+          </button>
+          <span className="px-1">
+            Page {page} / {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            ›
+          </button>
+          <button
+            onClick={() => setPage(totalPages)}
+            disabled={page >= totalPages}
+            className="rounded border border-border bg-secondary px-2 py-1 disabled:opacity-40"
+          >
+            »
+          </button>
+        </div>
+      </div>
+
       <DataTableShell>
         <Thead>
           <tr>
             <Th>
               <input
                 type="checkbox"
-                checked={allFilteredSelected}
-                onChange={toggleAllFiltered}
+                checked={allPageSelected}
+                onChange={toggleAllPage}
                 className="h-4 w-4 cursor-pointer accent-primary"
-                aria-label="Select all filtered"
+                aria-label="Select all on this page"
               />
             </Th>
             <Th>SKU</Th>
@@ -837,12 +924,6 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         </tbody>
       </DataTableShell>
 
-      {truncated && (
-        <p className="text-xs text-muted-foreground">
-          Showing first {RENDER_CAP.toLocaleString()} of {filtered.length.toLocaleString()} matching rows. Narrow your
-          search to see more.
-        </p>
-      )}
 
       {eligibleAll.length === 0 && (
         <p className="text-sm text-muted-foreground">
