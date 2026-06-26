@@ -358,11 +358,13 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   // ─── Dimensions import ────────────────────────────────
   const dimFileRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
 
   async function onDimensionsFile(file: File) {
     setImporting(true);
     setImportResult(null);
+    setImportProgress(null);
     try {
       const text = await file.text();
       const { rows: parsed, errors } = parseDimensionsCsv(text);
@@ -407,10 +409,30 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       }
       if (resolved.length === 0) throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
 
-      const res = await importDimensions({ data: { rows: resolved } });
-      setImportResult(res);
+      // Chunk into batches so each server call stays well under the Worker
+      // timeout. ~4500 sequential UPDATEs in one call were freezing.
+      const BATCH = 200;
+      let updated = 0;
+      let skipped = 0;
+      const allErrors: Array<{ sku: string; reason: string }> = [];
+      setImportProgress({ done: 0, total: resolved.length });
+      for (let i = 0; i < resolved.length; i += BATCH) {
+        const chunk = resolved.slice(i, i + BATCH);
+        const res = await importDimensions({ data: { rows: chunk } });
+        updated += res.updated;
+        skipped += res.skipped;
+        allErrors.push(...res.errors);
+        setImportProgress({ done: Math.min(i + BATCH, resolved.length), total: resolved.length });
+      }
+      const finalRes: ImportDimensionsResult = {
+        received: resolved.length,
+        updated,
+        skipped,
+        errors: allErrors,
+      };
+      setImportResult(finalRes);
       toast.success(
-        `Updated ${res.updated.toLocaleString()} SKUs · skipped ${res.skipped.toLocaleString()} · ${res.errors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
+        `Updated ${updated.toLocaleString()} SKUs · skipped ${skipped.toLocaleString()} · ${allErrors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
       );
       void refreshOverview();
     } catch (e) {
@@ -418,9 +440,12 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       toast.error(`Import failed: ${msg}`);
     } finally {
       setImporting(false);
+      setImportProgress(null);
       if (dimFileRef.current) dimFileRef.current.value = "";
     }
   }
+
+
 
 
 
@@ -578,7 +603,12 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
               disabled={importing}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
             >
-              {importing ? "Importing…" : "Import dimensions CSV"}
+              {importing
+                ? importProgress
+                  ? `Importing… ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()}`
+                  : "Importing…"
+                : "Import dimensions CSV"}
+
             </button>
           </div>
         </div>
