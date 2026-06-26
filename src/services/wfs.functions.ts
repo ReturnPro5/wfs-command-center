@@ -2331,7 +2331,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       const manufacturer = (r.manufacturer ?? "").trim() || brand;
       if (!brand) missing.push("brand");
       if (!manufacturer) missing.push("manufacturer");
-      // mainImageUrl is optional per Walmart — do not block submission when missing
+      if (!(r.main_image_url ?? "").trim()) missing.push("mainImageUrl");
 
       if (!(r.country_of_origin ?? "").trim()) missing.push("countryOfOrigin");
       if (!(r.product_type ?? "").trim()) missing.push("productType");
