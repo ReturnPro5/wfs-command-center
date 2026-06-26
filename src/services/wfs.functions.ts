@@ -2272,6 +2272,105 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     }
   });
 
+// ─── Import dimensions CSV ───────────────────────────────
+// Operator workflow: export UPCs → fill dims in a spreadsheet →
+// upload here. This bypasses the items API enrichment for shipping
+// weight & dimensions (which Walmart doesn't reliably return) and
+// marks updated SKUs as fully enriched so they appear in the
+// "Ready to submit" view.
+
+export interface ImportDimensionsRow {
+  sku: string;
+  length?: number | null;
+  width?: number | null;
+  height?: number | null;
+  weight?: number | null;
+  weightUnit?: string;
+  dimUnit?: string;
+  countryOfOrigin?: string;
+}
+
+export interface ImportDimensionsResult {
+  received: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{ sku: string; reason: string }>;
+}
+
+export const importDimensions = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        rows: z
+          .array(
+            z.object({
+              sku: z.string().min(1).max(50),
+              length: z.number().positive().nullable().optional(),
+              width: z.number().positive().nullable().optional(),
+              height: z.number().positive().nullable().optional(),
+              weight: z.number().positive().nullable().optional(),
+              weightUnit: z.string().max(8).optional(),
+              dimUnit: z.string().max(8).optional(),
+              countryOfOrigin: z.string().max(64).optional(),
+            })
+          )
+          .min(1)
+          .max(10000),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }): Promise<ImportDimensionsResult> => {
+    const errors: Array<{ sku: string; reason: string }> = [];
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of data.rows) {
+      const hasAll =
+        (row.length ?? 0) > 0 &&
+        (row.width ?? 0) > 0 &&
+        (row.height ?? 0) > 0 &&
+        (row.weight ?? 0) > 0;
+      if (!hasAll) {
+        skipped++;
+        errors.push({
+          sku: row.sku,
+          reason: "missing one or more of length/width/height/weight",
+        });
+        continue;
+      }
+      const patch: Record<string, unknown> = {
+        shipping_length: row.length,
+        shipping_width: row.width,
+        shipping_height: row.height,
+        shipping_weight: row.weight,
+        shipping_dim_unit: row.dimUnit || "in",
+        shipping_weight_unit: row.weightUnit || "lb",
+        enrichment_status: "enriched",
+        enriched_at: new Date().toISOString(),
+      };
+      if (row.countryOfOrigin && row.countryOfOrigin.trim()) {
+        patch.country_of_origin = row.countryOfOrigin.trim();
+      }
+      const { error, count } = await supabaseAdmin
+        .from("catalog_items")
+        .update(patch, { count: "exact" })
+        .eq("sku", row.sku);
+      if (error) {
+        errors.push({ sku: row.sku, reason: error.message });
+        continue;
+      }
+      if ((count ?? 0) === 0) {
+        skipped++;
+        errors.push({ sku: row.sku, reason: "SKU not found in catalog" });
+        continue;
+      }
+      updated++;
+    }
+
+    return { received: data.rows.length, updated, skipped, errors };
+  });
+
+
 export interface WfsConversionRunSummary {
   id: string;
   feedId: string | null;
