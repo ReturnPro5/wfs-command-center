@@ -2478,7 +2478,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
             TradeItem: {
               sku: r.sku,
               orderableGTIN: gtin,
-              countryOfOriginAssembly: [String(r.country_of_origin).trim()],
+              countryOfOriginAssembly: [normalizeCountryOfOrigin(String(r.country_of_origin))],
               each: {
                 eachDepth: length,
                 eachWidth: width,
