@@ -71,17 +71,27 @@ function csvEscapeId(v: string): string {
 function exportDimensionsTemplate(rows: Row[]) {
   const lines = [DIM_TEMPLATE_HEADER.join(",")];
   for (const r of rows) {
+    const brand = (r as any).brand ?? "";
+    const mainImageUrl = (r as any).mainImageUrl ?? "";
+    const productType = (r as any).productType ?? r.category ?? "";
+    const price =
+      typeof (r as any).price === "number" && Number.isFinite((r as any).price)
+        ? String((r as any).price)
+        : "";
     lines.push(
       [
         csvEscapeId(r.sku),
         csvEscapeId(r.upc),
         csvEscape(r.productName),
-        csvEscape(r.category ?? ""),
+        csvEscape(productType),
+        csvEscape(brand),
+        // Manufacturer left blank — server defaults it to Brand at submit.
         "",
+        csvEscape(mainImageUrl),
+        price,
+        // CountryOfOrigin — user fills this.
         "",
-        "",
-        "",
-        "",
+        // Dimensions + weight — user fills these.
         "",
         "",
         "",
@@ -99,6 +109,7 @@ function exportDimensionsTemplate(rows: Row[]) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
 
 
 // Minimal CSV parser supporting quoted fields, escaped quotes, and ="..." cells.
