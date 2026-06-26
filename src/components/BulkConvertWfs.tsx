@@ -440,18 +440,37 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         upcToSkus.set(u, arr);
       }
 
-      const resolved: Array<{
+      type ResolvedRow = {
         sku: string;
         length: number | null;
         width: number | null;
         height: number | null;
         weight: number | null;
         countryOfOrigin?: string;
-      }> = [];
+        brand?: string;
+        manufacturer?: string;
+        mainImageUrl?: string;
+        productType?: string;
+        price?: number | null;
+      };
+      const resolved: ResolvedRow[] = [];
+      const rowFor = (sku: string, r: ParsedDimRow): ResolvedRow => ({
+        sku,
+        length: r.length,
+        width: r.width,
+        height: r.height,
+        weight: r.weight,
+        countryOfOrigin: r.countryOfOrigin,
+        brand: r.brand,
+        manufacturer: r.manufacturer,
+        mainImageUrl: r.mainImageUrl,
+        productType: r.productType,
+        price: r.price,
+      });
       let unresolved = 0;
       for (const r of parsed) {
         if (r.sku) {
-          resolved.push({ sku: r.sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
+          resolved.push(rowFor(r.sku, r));
           continue;
         }
         const u = (r.upc ?? "").replace(/[^0-9]/g, "");
@@ -460,11 +479,10 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           unresolved++;
           continue;
         }
-        for (const sku of skus) {
-          resolved.push({ sku, length: r.length, width: r.width, height: r.height, weight: r.weight, countryOfOrigin: r.countryOfOrigin });
-        }
+        for (const sku of skus) resolved.push(rowFor(sku, r));
       }
       if (resolved.length === 0) throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
+
 
       // Larger batches + parallel server calls. Each server call now fans
       // out internally with a concurrency pool, so we keep client parallelism
