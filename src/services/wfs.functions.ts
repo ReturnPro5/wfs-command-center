@@ -2256,7 +2256,10 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         weight,
         isHazmat,
         gtin,
+        brand,
+        manufacturer,
       });
+
     }
 
     // Group ready items by subCategory — Walmart accepts only ONE
