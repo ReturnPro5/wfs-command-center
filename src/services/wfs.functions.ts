@@ -2055,18 +2055,26 @@ async function getCatalogPageInternal(
   const list: any[] =
     page?.ItemResponse ?? page?.itemResponse ?? page?.items ?? page?.elements ?? page?.list?.elements?.item ?? [];
   const items: CatalogIdentifier[] = list
-    .map((it: any) => ({
-      sku: String(it.sku ?? it.SKU ?? it.mart_sku ?? ""),
-      productName: String(it.productName ?? it.product_name ?? it.name ?? ""),
-      gtin: String(it.gtin ?? it.GTIN ?? ""),
-      upc: String(
-        it.upc ?? it.UPC ?? it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ?? ""
-      ),
-      condition: String(it.condition ?? it.itemCondition ?? "New"),
-      publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
-      fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
-      category: String(it.category ?? it.productType ?? it.primaryCategory ?? ""),
-    }))
+    .map((it: any) => {
+      const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
+      const report = sku ? itemReportFulfillment.get(sku) : undefined;
+      return {
+        sku,
+        productName: String(it.productName ?? it.product_name ?? it.name ?? report?.productName ?? ""),
+        gtin: String(it.gtin ?? it.GTIN ?? report?.gtin ?? ""),
+        upc: String(
+          it.upc ?? it.UPC ?? it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ?? report?.upc ?? ""
+        ),
+        condition: String(it.condition ?? it.itemCondition ?? "New"),
+        publishedStatus: String(it.publishedStatus ?? it.published_status ?? publishedStatus),
+        fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
+        category: String(it.category ?? it.productType ?? it.primaryCategory ?? report?.productType ?? ""),
+        brand: report?.brand,
+        mainImageUrl: report?.mainImageUrl,
+        price: report?.price ?? null,
+        productType: report?.productType,
+      };
+    })
     .filter((i) => i.sku);
   const totalCount: number | null =
     page?.totalItems ?? page?.totalCount ?? page?.meta?.totalCount ?? page?.list?.meta?.totalCount ?? null;
