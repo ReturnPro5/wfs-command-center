@@ -2473,7 +2473,11 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               stateRestrictions: [{ stateRestrictionsText: "None" }],
               batteryTechnologyType: "Does Not Contain a Battery",
               electronicsIndicator: "No",
-              chemicalAerosolPesticide: isHazmat ? "Yes" : "No",
+              chemicalAerosolPesticide: "No",
+              hasWarning: "No",
+              warningText: "No Warning Applicable",
+              californiaPropositionWarningType: ["No Warning Applicable"],
+              californiaPropositionWarningMessage: "No Warning Applicable",
             },
             TradeItem: {
               sku: r.sku,
