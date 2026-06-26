@@ -1306,6 +1306,28 @@ const COL_ALIASES = {
   upc: ["upc", "productid"],
 } as const;
 
+const REPORT_DETAIL_FIELDS: Array<keyof ItemReportRow> = [
+  "brand",
+  "mainImageUrl",
+  "price",
+  "productType",
+  "productName",
+  "gtin",
+  "upc",
+];
+
+function mergeReportRows(base: ItemReportRow | undefined, next: ItemReportRow): ItemReportRow {
+  if (!base) return next;
+  const merged: ItemReportRow = { ...base };
+  if (!merged.fulfillment && next.fulfillment) merged.fulfillment = next.fulfillment;
+  for (const field of REPORT_DETAIL_FIELDS) {
+    if ((merged[field] === undefined || merged[field] === null || merged[field] === "") && next[field] != null && next[field] !== "") {
+      (merged as any)[field] = next[field];
+    }
+  }
+  return merged;
+}
+
 function findCol(header: string[], aliases: readonly string[]): number {
   for (const a of aliases) {
     const i = header.indexOf(a);
@@ -1363,7 +1385,7 @@ function parseFulfillmentReport(csv: string): Map<string, ItemReportRow> {
   }
   for (const row of rows.slice(1)) {
     const entry = buildReportRow(row, idx);
-    if (entry) map.set(entry.sku, entry.data);
+    if (entry) map.set(entry.sku, mergeReportRows(map.get(entry.sku), entry.data));
   }
   return map;
 }
@@ -1393,7 +1415,7 @@ function createFulfillmentReportParser() {
     if (!idx || idx.sku < 0) return;
     const row = parseCsvLine(line, delimiter);
     const entry = buildReportRow(row, idx);
-    if (entry) map.set(entry.sku, entry.data);
+    if (entry) map.set(entry.sku, mergeReportRows(map.get(entry.sku), entry.data));
   }
 
   return {
@@ -1484,16 +1506,8 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, ItemReportRow>
   const promise = (async (): Promise<Map<string, ItemReportRow>> => {
     try {
       if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
-        let requestId: string | null = null;
-        try {
-          requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
-        } catch (err) {
-          console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
-        }
-        if (!requestId) {
-          const request = await walmartApi.createItemReportRequest();
-          requestId = getReportRequestId(request);
-        }
+        const request = await walmartApi.createItemReportRequest();
+        const requestId = getReportRequestId(request);
         if (!requestId) throw new Error(`missing requestId in item report response`);
         fulfillmentReportRequest = { ts: Date.now(), requestId };
       }
@@ -1703,7 +1717,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, product_type, enrichment_status, enriched_at")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
@@ -1724,6 +1738,10 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           publishedStatus: r.published_status ?? "",
           fulfillment: r.fulfillment ?? "Unknown",
           category: cat,
+          brand: r.brand ?? "",
+          mainImageUrl: r.main_image_url ?? "",
+          price: typeof r.price === "number" ? r.price : r.price == null ? null : Number(r.price),
+          productType: r.product_type ?? "",
           enrichmentStatus: r.enrichment_status ?? "pending",
           enrichedAt: r.enriched_at ?? null,
         });

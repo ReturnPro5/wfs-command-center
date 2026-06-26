@@ -205,7 +205,18 @@ export async function getItem(sku: string) {
 // ─── Reports ────────────────────────────────────────────
 // The on-request ITEM report v4 is Walmart's documented source for
 // fulfillment type: WFS Eligible, Walmart Fulfilled, or Seller Fulfilled.
-const ITEM_REPORT_KEEP_COLUMNS = new Set(["SKU", "Fulfillment Type"]);
+const ITEM_REPORT_KEEP_COLUMNS = new Set([
+  "SKU",
+  "Product Name",
+  "Product Category",
+  "Price",
+  "Currency",
+  "Fulfillment Type",
+  "GTIN",
+  "UPC",
+  "Primary Image URL",
+  "Brand",
+]);
 const ITEM_REPORT_V4_COLUMNS = [
   "SKU",
   "Item ID",
