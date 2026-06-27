@@ -2508,6 +2508,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
             Visible: {
               [it.visibleKey]: {
                 manufacturer,
+                isProp65WarningRequired: "No",
                 ...(img ? { mainImageUrl: img } : {}),
               },
             },
@@ -2527,7 +2528,6 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               batteryTechnologyType: "Does Not Contain a Battery",
               electronicsIndicator: "No",
               chemicalAerosolPesticide: "No",
-              prop65WarningRequired: "No",
             },
             TradeItem: {
               sku: r.sku,
