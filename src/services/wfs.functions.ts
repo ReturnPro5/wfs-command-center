@@ -2295,6 +2295,129 @@ function genRequestId(): string {
   });
 }
 
+// ─── OMNI_WFS payload validator ─────────────────────────
+// Walks Walmart's published JSON Schema for the feedType (optionally per
+// productType) and extracts (a) the union of all valid property names and
+// (b) the required-fields list at each "properties" level. Then walks our
+// constructed payload, flagging:
+//   - unknown keys (typos, deprecated names, wrong nesting)
+//   - missing required keys at any level where we placed an object whose
+//     siblings match a schema "properties" block
+// If the spec can't be fetched or parsed, validation is skipped (logged) so
+// a transient spec-API outage doesn't block conversions.
+type SpecIndex = {
+  allowedKeys: Set<string>;
+  requiredByBlock: Map<string, Set<string>>;
+};
+
+function indexSpecSchema(schema: any): SpecIndex {
+  const allowedKeys = new Set<string>();
+  const requiredByBlock = new Map<string, Set<string>>();
+  const seen = new WeakSet<object>();
+
+  function walk(node: any, blockName: string | null) {
+    if (!node || typeof node !== "object") return;
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    if (node.properties && typeof node.properties === "object") {
+      const keys = Object.keys(node.properties);
+      for (const k of keys) allowedKeys.add(k);
+      if (blockName && Array.isArray(node.required)) {
+        const set = requiredByBlock.get(blockName) ?? new Set<string>();
+        for (const r of node.required) set.add(String(r));
+        requiredByBlock.set(blockName, set);
+      }
+      for (const [k, v] of Object.entries(node.properties)) walk(v, k);
+    }
+
+    for (const combinator of ["oneOf", "anyOf", "allOf"]) {
+      if (Array.isArray(node[combinator])) {
+        for (const sub of node[combinator]) walk(sub, blockName);
+      }
+    }
+    if (node.items) walk(node.items, blockName);
+    if (node.definitions && typeof node.definitions === "object") {
+      for (const [k, v] of Object.entries(node.definitions)) walk(v, k);
+    }
+    if (node.$defs && typeof node.$defs === "object") {
+      for (const [k, v] of Object.entries(node.$defs)) walk(v, k);
+    }
+  }
+
+  walk(schema, null);
+  return { allowedKeys, requiredByBlock };
+}
+
+function validatePayloadAgainstSpec(
+  payload: any,
+  index: SpecIndex
+): { unknownKeys: string[]; missingRequired: string[] } {
+  const unknownKeys = new Set<string>();
+  const missingRequired = new Set<string>();
+  const ALWAYS_OK = new Set(["SupplierItemFeedHeader", "SupplierItem"]);
+
+  function walk(node: any, blockName: string | null) {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const v of node) walk(v, blockName);
+      return;
+    }
+    const keys = Object.keys(node);
+    for (const k of keys) {
+      if (ALWAYS_OK.has(k)) continue;
+      if (!index.allowedKeys.has(k)) unknownKeys.add(`${blockName ?? "(root)"} → ${k}`);
+    }
+    if (blockName) {
+      const req = index.requiredByBlock.get(blockName);
+      if (req) {
+        for (const r of req) {
+          if (!(r in node)) missingRequired.add(`${blockName}.${r}`);
+        }
+      }
+    }
+    for (const [k, v] of Object.entries(node)) {
+      if (v && typeof v === "object") walk(v, k);
+    }
+  }
+
+  walk(payload, null);
+  return {
+    unknownKeys: Array.from(unknownKeys),
+    missingRequired: Array.from(missingRequired),
+  };
+}
+
+const specCache = new Map<string, SpecIndex | null>();
+async function loadSpecIndex(
+  feedType: string,
+  productType?: string
+): Promise<SpecIndex | null> {
+  const cacheKey = `${feedType}::${productType ?? ""}`;
+  if (specCache.has(cacheKey)) return specCache.get(cacheKey) ?? null;
+  try {
+    const raw = await walmartApi.getFeedSpec(feedType, productType);
+    const schema = raw?.payload ?? raw?.schema ?? raw;
+    const index = indexSpecSchema(schema);
+    if (index.allowedKeys.size === 0) {
+      console.warn(`[WFS:spec] empty schema for ${cacheKey}, validation skipped`);
+      specCache.set(cacheKey, null);
+      return null;
+    }
+    specCache.set(cacheKey, index);
+    return index;
+  } catch (err) {
+    console.warn(
+      `[WFS:spec] failed to fetch spec for ${cacheKey}:`,
+      err instanceof Error ? err.message : err
+    );
+    specCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+
+
 export const submitWfsConversion = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
     z
@@ -2558,6 +2681,47 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           },
           SupplierItem: supplierItems,
         };
+
+        // Pre-submit validation against Walmart's published OMNI_WFS spec.
+        // Uses the productType of the first item in the group (all items in
+        // a feed share subCategory; productType is usually consistent inside
+        // a subCategory). If unknown keys or missing required fields are
+        // detected, fail every SKU in this group locally — do not ship a
+        // payload Walmart will reject.
+        const probeProductType = items[0]?.visibleKey;
+        const specIndex = await loadSpecIndex(feedType, probeProductType);
+        if (specIndex) {
+          const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
+            feedBody,
+            specIndex
+          );
+          if (unknownKeys.length > 0 || missingRequired.length > 0) {
+            const reasonParts: string[] = [];
+            if (unknownKeys.length > 0) {
+              reasonParts.push(`Unknown field(s): ${unknownKeys.slice(0, 8).join(", ")}`);
+            }
+            if (missingRequired.length > 0) {
+              reasonParts.push(`Missing required: ${missingRequired.slice(0, 8).join(", ")}`);
+            }
+            const reason = `Payload failed local spec validation (subCategory=${subCategory}, productType=${probeProductType}). ${reasonParts.join(" | ")}`;
+            for (const it of items) {
+              allFailed.push({
+                sku: it.r.sku,
+                status: "SPEC_VALIDATION",
+                reason,
+              });
+            }
+            allSubmits.push({
+              subCategory,
+              error: "spec_validation_failed",
+              unknownKeys,
+              missingRequired,
+            });
+            continue;
+          }
+        }
+
+
 
         let submitRes: any = null;
         let statusPayload: any = null;
