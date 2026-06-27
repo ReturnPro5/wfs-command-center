@@ -432,3 +432,23 @@ export async function getFeedStatus(feedId: string, includeDetails = true): Prom
   return walmartFetch<any>(`/v3/feeds/${encodeURIComponent(feedId)}?${params}`);
 }
 
+// ─── Feed Spec (schema) ─────────────────────────────────
+// Walmart publishes the JSON Schema for each feedType (and optionally per
+// productType) at /v3/feeds/spec. We use it to validate payload field names
+// BEFORE submitting so typos / mis-nesting fail fast locally.
+export async function getFeedSpec(feedType: string, productType?: string): Promise<any> {
+  const params = new URLSearchParams({ feedType });
+  if (productType) params.set("productType", productType);
+  // Try the documented path first; fall back to the older items/spec path.
+  try {
+    return await walmartFetch<any>(`/v3/feeds/spec?${params}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/404|CONTENT_NOT_FOUND|400/i.test(msg)) {
+      return walmartFetch<any>(`/v3/items/spec?${params}`);
+    }
+    throw err;
+  }
+}
+
+
