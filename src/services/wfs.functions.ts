@@ -2682,6 +2682,47 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           SupplierItem: supplierItems,
         };
 
+        // Pre-submit validation against Walmart's published OMNI_WFS spec.
+        // Uses the productType of the first item in the group (all items in
+        // a feed share subCategory; productType is usually consistent inside
+        // a subCategory). If unknown keys or missing required fields are
+        // detected, fail every SKU in this group locally — do not ship a
+        // payload Walmart will reject.
+        const probeProductType = items[0]?.visibleKey;
+        const specIndex = await loadSpecIndex(feedType, probeProductType);
+        if (specIndex) {
+          const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
+            feedBody,
+            specIndex
+          );
+          if (unknownKeys.length > 0 || missingRequired.length > 0) {
+            const reasonParts: string[] = [];
+            if (unknownKeys.length > 0) {
+              reasonParts.push(`Unknown field(s): ${unknownKeys.slice(0, 8).join(", ")}`);
+            }
+            if (missingRequired.length > 0) {
+              reasonParts.push(`Missing required: ${missingRequired.slice(0, 8).join(", ")}`);
+            }
+            const reason = `Payload failed local spec validation (subCategory=${subCategory}, productType=${probeProductType}). ${reasonParts.join(" | ")}`;
+            for (const it of items) {
+              allFailed.push({
+                sku: it.r.sku,
+                status: "SPEC_VALIDATION",
+                reason,
+              });
+            }
+            allSubmits.push({
+              subCategory,
+              error: "spec_validation_failed",
+              unknownKeys,
+              missingRequired,
+            });
+            continue;
+          }
+        }
+
+
+
         let submitRes: any = null;
         let statusPayload: any = null;
         let timedOut = false;
