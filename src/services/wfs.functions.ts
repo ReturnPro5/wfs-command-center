@@ -2527,7 +2527,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               batteryTechnologyType: "Does Not Contain a Battery",
               electronicsIndicator: "No",
               chemicalAerosolPesticide: "No",
-              isProp65WarningRequired: "No",
+              prop65WarningRequired: "No",
             },
             TradeItem: {
               sku: r.sku,
