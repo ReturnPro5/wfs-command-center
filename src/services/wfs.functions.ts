@@ -2740,6 +2740,17 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         });
         continue;
       }
+      // Bulk Convert only handles Open Box items — any other condition is
+      // rejected before we build the payload so we never trigger Walmart's
+      // "condition differs from Seller Catalog" error.
+      const condNorm = String(r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
+      if (condNorm !== "openbox") {
+        preflightFailed.push({
+          sku,
+          status: "INELIGIBLE_CONDITION",
+          reason: `Only Open Box items are eligible for Bulk Convert (this SKU is "${r.condition ?? "Unknown"}")`,
+        });
+        continue;
       const length = Number(r.shipping_length ?? 0);
       const width = Number(r.shipping_width ?? 0);
       const height = Number(r.shipping_height ?? 0);
