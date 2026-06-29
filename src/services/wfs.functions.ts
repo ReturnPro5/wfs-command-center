@@ -2327,6 +2327,11 @@ const WALMART_REJECTED_OMNI_WFS_KEYS = new Set([
   "warningText",
 ]);
 
+// Walmart's live feed error for OMNI_WFS reports this API key when the label
+// "California Prop 65 Warning Text" is missing. The published spec endpoint is
+// inconsistent for OMNI_WFS, so keep this as a hard fallback/default.
+const WALMART_REQUIRED_PROP65_TEXT_KEY = "prop65WarningText";
+
 // Inspect the indexed spec for the given Visible productType block and find
 // the actual Prop 65 field names Walmart wants for THIS product type. Names
 // drift between product types (some use prop65WarningText, some use
@@ -2367,7 +2372,7 @@ function findProp65Fields(
   const candidates = list.filter(
     (k) => matchProp(k) && !WALMART_REJECTED_OMNI_WFS_KEYS.has(k)
   );
-  const textKey = candidates.find(isText) ?? null;
+  const textKey = candidates.find(isText) ?? WALMART_REQUIRED_PROP65_TEXT_KEY;
   const typeKey = candidates.find(isType) ?? null;
   return { textKey, typeKey };
 }
@@ -2445,8 +2450,11 @@ function validatePayloadAgainstSpec(
       const currentBlock = blockName ?? SPEC_ROOT_BLOCK;
       const allowedForBlock = index.allowedKeysByBlock.get(currentBlock);
       const rejected = WALMART_REJECTED_OMNI_WFS_KEYS.has(k);
+      const liveRequiredFallback = k === WALMART_REQUIRED_PROP65_TEXT_KEY;
       const unknownForBlock =
-        allowedForBlock && !index.openBlocks.has(currentBlock)
+        liveRequiredFallback
+          ? false
+          : allowedForBlock && !index.openBlocks.has(currentBlock)
           ? !allowedForBlock.has(k)
           : !index.allowedKeys.has(k);
       if (rejected || unknownForBlock) unknownKeys.add(`${currentBlock} → ${k}`);
