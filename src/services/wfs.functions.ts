@@ -2348,10 +2348,22 @@ function findProp65Fields(
     }
   }
   const list = Array.from(keys);
-  const matchProp = (k: string) =>
-    /prop(osition)?[_-]?65|californiaprop/i.test(k);
-  const isType = (k: string) => /type$/i.test(k);
-  const isText = (k: string) => /(text|message)$/i.test(k);
+  const normalizeKey = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const matchProp = (k: string) => {
+    const n = normalizeKey(k);
+    // Walmart's schema may expose either camelCase keys or display-label keys
+    // like "California Prop 65 Warning Text". Match after stripping spaces,
+    // punctuation, underscores, and dashes so those label keys are discovered.
+    return n.includes("prop65") || n.includes("proposition65") || n.includes("californiaprop65");
+  };
+  const isType = (k: string) => {
+    const n = normalizeKey(k);
+    return n.endsWith("type") || n.includes("warningtype");
+  };
+  const isText = (k: string) => {
+    const n = normalizeKey(k);
+    return n.endsWith("text") || n.endsWith("message") || n.includes("warningtext");
+  };
   const candidates = list.filter(
     (k) => matchProp(k) && !WALMART_REJECTED_OMNI_WFS_KEYS.has(k)
   );
