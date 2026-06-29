@@ -2276,6 +2276,9 @@ function normalizeWfsCondition(raw: unknown): string {
     return "Pre-Owned";
   if (lower.includes("used")) return "Used";
   return s;
+}
+
+
 
 // ─── Bulk WFS Conversion ────────────────────────────────
 // Submits selected SKUs to Walmart via the WFS item feed.
