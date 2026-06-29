@@ -2766,13 +2766,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         };
 
         // Pre-submit validation against Walmart's published OMNI_WFS spec.
-        // Uses the productType of the first item in the group (all items in
-        // a feed share subCategory; productType is usually consistent inside
-        // a subCategory). If unknown keys or missing required fields are
-        // detected, fail every SKU in this group locally — do not ship a
-        // payload Walmart will reject.
-        const probeProductType = items[0]?.visibleKey;
-        const specIndex = await loadSpecIndex(feedType, probeProductType);
+        // specIndex/probeProductType were loaded above before building the
+        // payload so Prop 65 field names could be derived dynamically.
+
         if (specIndex) {
           const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
             feedBody,
