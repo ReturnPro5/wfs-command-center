@@ -2710,13 +2710,6 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
 
     const ready: Ready[] = [];
 
-    const slug = (s: string) =>
-      String(s ?? "")
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "");
-
     for (const sku of data.skus) {
       const r = bySku.get(sku);
       if (!r) {
