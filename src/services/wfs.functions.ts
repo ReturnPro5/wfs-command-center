@@ -2707,7 +2707,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
           const img = String(r.main_image_url ?? "").trim();
           const propBlock: Record<string, string> = {};
-          if (prop65.textKey) propBlock[prop65.textKey] = "No Warning Applicable";
+          if (prop65.textKey) propBlock[prop65.textKey] = "None";
           if (prop65.typeKey) propBlock[prop65.typeKey] = "no_warning_applicable";
           return {
             Visible: {
