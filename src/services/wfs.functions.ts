@@ -2259,6 +2259,24 @@ function normalizeCountryOfOrigin(raw: string): string {
   return COUNTRY_MAP[key] ?? trimmed;
 }
 
+// Map seller-catalog condition strings to Walmart's accepted WFS enum values.
+// Walmart rejects any value that does not match the SKU's condition in the
+// seller catalog, so we must mirror the catalog taxonomy exactly.
+function normalizeWfsCondition(raw: unknown): string {
+  const s = String(raw ?? "").trim();
+  if (!s) return "New";
+  const lower = s.toLowerCase();
+  if (lower.startsWith("new")) return "New";
+  if (lower.includes("open box")) return "Open Box";
+  if (lower.includes("refurbish")) return "Refurbished";
+  if (lower.includes("restored: like new") || lower.includes("restored premium"))
+    return "Restored Premium";
+  if (lower.includes("restored")) return "Restored";
+  if (lower.includes("pre-owned") || lower.includes("preowned") || lower.includes("pre owned"))
+    return "Pre-Owned";
+  if (lower.includes("used")) return "Used";
+  return s;
+
 // ─── Bulk WFS Conversion ────────────────────────────────
 // Submits selected SKUs to Walmart via the WFS item feed.
 // NOTE: Walmart's WFS feed typically requires additional attributes
