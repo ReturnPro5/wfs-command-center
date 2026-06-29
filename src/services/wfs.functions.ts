@@ -2321,9 +2321,45 @@ const WALMART_REJECTED_OMNI_WFS_KEYS = new Set([
   "prop65WarningRequired",
   "californiaPropositionWarningMessage",
   "californiaPropositionWarningType",
+  "californiaPropWarningText",
+  "californiaPropWarningType",
   "hasWarning",
   "warningText",
 ]);
+
+// Inspect the indexed spec for the given Visible productType block and find
+// the actual Prop 65 field names Walmart wants for THIS product type. Names
+// drift between product types (some use prop65WarningText, some use
+// californiaProp65WarningText, etc.). Returns { textKey, typeKey } when
+// found, or nulls when this product type has no Prop 65 fields at all.
+function findProp65Fields(
+  index: SpecIndex,
+  visibleKey: string
+): { textKey: string | null; typeKey: string | null } {
+  const keys = new Set<string>();
+  // Look at the Visible block for this product type and any nested blocks.
+  const direct = index.allowedKeysByBlock.get(visibleKey);
+  if (direct) for (const k of direct) keys.add(k);
+  // Also look at any block whose name contains the productType (some specs
+  // expose blocks like `Visible.<productType>` or `<productType>Visible`).
+  for (const [block, set] of index.allowedKeysByBlock) {
+    if (block.toLowerCase().includes(visibleKey.toLowerCase())) {
+      for (const k of set) keys.add(k);
+    }
+  }
+  const list = Array.from(keys);
+  const matchProp = (k: string) =>
+    /prop(osition)?[_-]?65|californiaprop/i.test(k);
+  const isType = (k: string) => /type$/i.test(k);
+  const isText = (k: string) => /(text|message)$/i.test(k);
+  const candidates = list.filter(
+    (k) => matchProp(k) && !WALMART_REJECTED_OMNI_WFS_KEYS.has(k)
+  );
+  const textKey = candidates.find(isText) ?? null;
+  const typeKey = candidates.find(isType) ?? null;
+  return { textKey, typeKey };
+}
+
 
 function indexSpecSchema(schema: any): SpecIndex {
   const allowedKeys = new Set<string>();
