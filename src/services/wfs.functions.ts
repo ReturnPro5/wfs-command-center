@@ -2928,16 +2928,14 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           submitFailed = true;
         }
       }
+      let feedId: string | null = null;
       if (!skipSubmit && !submitFailed) {
         actualSubmittedCount = items.length;
-        const feedId: string | null =
-          submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
+        feedId = submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
         if (feedId) allFeedIds.push(feedId);
         allSubmits.push({ feedId, raw: submitRes });
       }
-      const feedId: string | null = !skipSubmit && !submitFailed
-        ? (submitRes?.feedId ?? submitRes?.payload?.feedId ?? null)
-        : null;
+
 
 
       if (feedId) {
