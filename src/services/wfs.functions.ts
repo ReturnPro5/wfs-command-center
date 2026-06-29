@@ -2832,7 +2832,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         );
         const netContentMeasure =
           Number(r.net_content) > 0 ? Number(r.net_content) : 1;
-        const condition = String(r.condition ?? "").trim() || "New";
+        const condition = normalizeWfsCondition(r.condition);
         // Suppress unused-var warning for manufacturer (kept in destructure for
         // future use but not emitted — Walmart spec rejects the field).
         void manufacturer;
