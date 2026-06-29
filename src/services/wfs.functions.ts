@@ -2696,7 +2696,6 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     const preflightFailed: WfsConversionFailedItem[] = [];
     type Ready = {
       r: any;
-      subCategory: string;
       visibleKey: string;
       length: number;
       width: number;
@@ -2730,15 +2729,15 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       if (!(height > 0)) missing.push("height");
       if (!(weight > 0)) missing.push("weight");
       const brand = (r.brand ?? "").trim();
-      // Manufacturer defaults to Brand when not separately provided —
-      // Walmart accepts that and most sellers carry the same value.
       const manufacturer = (r.manufacturer ?? "").trim() || brand;
-      if (!brand) missing.push("brand");
-      if (!manufacturer) missing.push("manufacturer");
+      const visibleKey = String(r.product_type ?? "").trim();
+      // Movies and Music don't carry brand in Walmart taxonomy.
+      const brandRequired = !["movies", "music"].includes(visibleKey.toLowerCase());
+      if (brandRequired && !brand) missing.push("brand");
+      if (brandRequired && !manufacturer) missing.push("manufacturer");
       if (!(r.main_image_url ?? "").trim()) missing.push("mainImageUrl");
-
       if (!(r.country_of_origin ?? "").trim()) missing.push("countryOfOrigin");
-      if (!(r.product_type ?? "").trim()) missing.push("productType");
+      if (!visibleKey) missing.push("productType");
       if (r.price == null) missing.push("price");
       const gtin = String(r.gtin || r.upc || "").trim();
       if (!gtin) missing.push("gtin/upc");
@@ -2752,11 +2751,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       }
       const sds = classifySds(r.product_name);
       const isHazmat = sds.requirement === "Likely required";
-      const subCategory = chooseOmniWfsSubCategory(r.sub_category, r.product_type, r.category);
-      const visibleKey = String(r.product_type).trim();
       ready.push({
         r,
-        subCategory,
         visibleKey,
         length,
         width,
@@ -2767,40 +2763,19 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         brand,
         manufacturer,
       });
-
     }
 
-    // Group ready items by normalized WFS subCategory — Walmart accepts only
-    // ONE header subCategory per OMNI_WFS feed, so we fan out one submission
-    // per group. Allow Walmart's documented 20-category run size; do not
-    // silently skip the smaller categories.
-    const groups = new Map<string, Ready[]>();
-    for (const item of ready) {
-      const list = groups.get(item.subCategory) ?? [];
-      list.push(item);
-      groups.set(item.subCategory, list);
-    }
-    const MAX_GROUPS = 20;
-    if (groups.size > MAX_GROUPS) {
-      throw new Error(
-        `Selection spans ${groups.size} WFS subCategories. Walmart accepts max ${MAX_GROUPS} per run — filter by category/subCategory first.`
-      );
-    }
-
-    const readyToSubmitCount = Array.from(groups.values()).reduce(
-      (n, list) => n + list.length,
-      0
-    );
+    const readyToSubmitCount = ready.length;
 
     const { data: runRow, error: insErr } = await supabaseAdmin
       .from("wfs_conversion_runs")
       .insert({
         sku_count: readyToSubmitCount,
-        skus: Array.from(groups.values()).flat().map((i) => i.r.sku),
+        skus: ready.map((i) => i.r.sku),
         status: readyToSubmitCount === 0 ? "no_eligible" : "submitting",
         response: {
           preflightFailed: preflightFailed as unknown as Record<string, unknown>[],
-          subCategories: Array.from(groups.keys()),
+          specVersion: process.env.WALMART_OMNI_SPEC_VERSION ?? "5.0.20260205-21_38_48-api",
         } as any,
       })
       .select("id")
@@ -2824,7 +2799,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       };
     }
 
-    // Build one SupplierItem feed per subCategory and submit sequentially.
+    // Build a single OMNI_WFS feed (Spec 5.0). The 5.0 envelope no longer
+    // carries `subCategory` on the header, so one feed can mix product types.
     const allFeedIds: string[] = [];
     const allSubmits: any[] = [];
     const allStatuses: any[] = [];
@@ -2838,133 +2814,101 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     let anyTimedOut = false;
     let lastStatus = "submitted";
 
+    const SPEC_VERSION =
+      process.env.WALMART_OMNI_SPEC_VERSION ?? "5.0.20260205-21_38_48-api";
+
     try {
-      const groupEntries = Array.from(groups.entries());
-      const shouldPollStatus = groupEntries.length <= 3;
-      const sharedSpecIndex = groupEntries.length > 3 ? await loadSpecIndex(feedType) : null;
-      for (let groupIndex = 0; groupIndex < groupEntries.length; groupIndex++) {
-        const [subCategory, items] = groupEntries[groupIndex];
-        if (groupIndex > 0 && groupEntries.length > 3) {
-          await new Promise((res) => setTimeout(res, 1000));
-        }
-        // Load spec FIRST so we can derive the right Prop 65 field names
-        // (which vary per productType) before building the payload.
-        const visibleKeys = new Set(items.map((i) => i.visibleKey).filter(Boolean));
-        const probeProductType = items[0]?.visibleKey;
-        const specIndex = sharedSpecIndex ?? await loadSpecIndex(
-          feedType,
-          visibleKeys.size === 1 ? probeProductType : undefined
+      const items = ready;
+      // Single spec fetch for validation. The spec endpoint accepts the
+      // mixed productType set; if it fails we proceed without local validation
+      // and let Walmart's feed processor report errors.
+      const specIndex = await loadSpecIndex(feedType).catch(() => null);
+
+      const supplierItems = items.map((it) => {
+        const { r, gtin, length, width, height, weight, brand, manufacturer } = it;
+        const img = String(r.main_image_url ?? "").trim();
+        const isMoviesOrMusic = ["movies", "music"].includes(
+          it.visibleKey.toLowerCase()
         );
-
-        const supplierItems = items.map((it) => {
-          const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
-          const img = String(r.main_image_url ?? "").trim();
-          const prop65 = specIndex && it.visibleKey
-            ? findProp65Fields(specIndex, it.visibleKey)
-            : { textKey: WALMART_REQUIRED_PROP65_TEXT_KEY, typeKey: null };
-          const propBlock: Record<string, string> = {
-            // Walmart's feed status returns `field: prop65WarningText` for the
-            // required "California Prop 65 Warning Text" attribute. Submit that
-            // exact API key every time; the spec endpoint may be absent/stale.
-            [prop65.textKey ?? WALMART_REQUIRED_PROP65_TEXT_KEY]: "None",
-          };
-          if (prop65.typeKey) propBlock[prop65.typeKey] = "no_warning_applicable";
-          return {
-            Visible: {
-              [it.visibleKey]: {
-                manufacturer,
-                ...(img ? { mainImageUrl: img } : {}),
-                ...propBlock,
-              },
-            },
-            Orderable: {
-              sku: r.sku,
-              productName: String(r.product_name).trim(),
-              brand,
-
-              productIdentifiers: {
-                productId: gtin,
-                productIdType: gtin.length === 12 ? "UPC" : "GTIN",
-              },
-              price: Number(r.price),
-              startDate: new Date().toISOString(),
-              endDate: "2040-01-01T00:00:00.000Z",
-              stateRestrictions: [{ stateRestrictionsText: "None" }],
-              batteryTechnologyType: "Does Not Contain a Battery",
-              electronicsIndicator: "No",
-              chemicalAerosolPesticide: "No",
-            },
-            TradeItem: {
-              sku: r.sku,
-              orderableGTIN: gtin,
-              countryOfOriginAssembly: [normalizeCountryOfOrigin(String(r.country_of_origin))],
-              each: {
-                eachDepth: length,
-                eachWidth: width,
-                eachHeight: height,
-                eachWeight: weight,
-                eachGTIN: gtin,
-              },
-            },
-
-
-
-          };
-        });
-
-
-        const feedBody = {
-          SupplierItemFeedHeader: {
-            subCategory,
-            sellingChannel: "fbw",
-            processMode: "REPLACE",
-            locale: "en",
-            version: "1.4",
-            subset: "EXTERNAL",
-          },
-          SupplierItem: supplierItems,
+        const netContent = Number(r.net_content) > 0 ? Number(r.net_content) : 1;
+        const condition = String(r.condition ?? "").trim() || "New";
+        const visibleBlock: Record<string, unknown> = {
+          productName: String(r.product_name).trim(),
+          ...(isMoviesOrMusic ? {} : { brand, manufacturer }),
+          mainImageUrl: img,
+          isProp65WarningRequired: "No",
+          netContent,
+          condition,
         };
+        return {
+          Visible: {
+            [it.visibleKey]: visibleBlock,
+          },
+          Orderable: {
+            sku: r.sku,
+            productIdentifiers: {
+              productId: gtin,
+              productIdType: gtin.length === 12 ? "UPC" : "GTIN",
+            },
+            price: Number(r.price),
+            stateRestrictions: [{ stateRestrictionsText: "None" }],
+            electronicsIndicator: "No",
+            batteryTechnologyType: "Does Not Contain a Battery",
+            isChemical: "No",
+            isAerosol: "No",
+            isPesticide: "No",
+          },
+          TradeItem: {
+            sku: r.sku,
+            countryOfOriginAssembly: [
+              normalizeCountryOfOrigin(String(r.country_of_origin)),
+            ],
+            each: {
+              eachDepth: length,
+              eachWidth: width,
+              eachHeight: height,
+              eachWeight: weight,
+            },
+          },
+        };
+      });
 
-        // Pre-submit validation against Walmart's published OMNI_WFS spec.
-        // specIndex/probeProductType were loaded above before building the
-        // payload so Prop 65 field names could be derived dynamically.
+      const feedBody = {
+        SupplierItemFeedHeader: {
+          businessUnit: "WALMART_US",
+          locale: "en",
+          version: SPEC_VERSION,
+        },
+        SupplierItem: supplierItems,
+      };
 
-        if (specIndex) {
-          const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
-            feedBody,
-            specIndex
-          );
-          if (unknownKeys.length > 0 || missingRequired.length > 0) {
-            const reasonParts: string[] = [];
-            if (unknownKeys.length > 0) {
-              reasonParts.push(`Unknown field(s): ${unknownKeys.slice(0, 8).join(", ")}`);
-            }
-            if (missingRequired.length > 0) {
-              reasonParts.push(`Missing required: ${missingRequired.slice(0, 8).join(", ")}`);
-            }
-            const reason = `Payload failed local spec validation (subCategory=${subCategory}, productType=${probeProductType}). ${reasonParts.join(" | ")}`;
-            for (const it of items) {
-              allFailed.push({
-                sku: it.r.sku,
-                status: "SPEC_VALIDATION",
-                reason,
-              });
-            }
-            allSubmits.push({
-              subCategory,
-              error: "spec_validation_failed",
-              unknownKeys,
-              missingRequired,
-            });
-            continue;
+      let skipSubmit = false;
+      if (specIndex) {
+        const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
+          feedBody,
+          specIndex
+        );
+        if (unknownKeys.length > 0 || missingRequired.length > 0) {
+          const reasonParts: string[] = [];
+          if (unknownKeys.length > 0)
+            reasonParts.push(`Unknown field(s): ${unknownKeys.slice(0, 8).join(", ")}`);
+          if (missingRequired.length > 0)
+            reasonParts.push(`Missing required: ${missingRequired.slice(0, 8).join(", ")}`);
+          const reason = `Payload failed local spec validation. ${reasonParts.join(" | ")}`;
+          for (const it of items) {
+            allFailed.push({ sku: it.r.sku, status: "SPEC_VALIDATION", reason });
           }
+          allSubmits.push({ error: "spec_validation_failed", unknownKeys, missingRequired });
+          lastStatus = "spec_validation_failed";
+          skipSubmit = true;
         }
+      }
 
-
-
-        let submitRes: any = null;
-        let statusPayload: any = null;
-        let timedOut = false;
+      let submitRes: any = null;
+      let statusPayload: any = null;
+      let timedOut = false;
+      let submitFailed = false;
+      if (!skipSubmit) {
         try {
           submitRes = await walmartApi.submitFeed(feedType, feedBody);
         } catch (e) {
@@ -2975,135 +2919,121 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               sku: it.r.sku,
               status: rateLimited ? "RATE_LIMIT" : "SUBMIT_ERROR",
               reason: rateLimited
-                ? `Walmart rate limit hit while submitting subCategory=${subCategory}; rerun these SKUs later`
-                : `Feed submit failed for subCategory=${subCategory}: ${msg}`,
+                ? `Walmart rate limit hit; rerun these SKUs later`
+                : `Feed submit failed: ${msg}`,
             });
           }
-          allSubmits.push({ subCategory, error: msg, rateLimited });
-          if (rateLimited) {
-            for (const [, remainingItems] of groupEntries.slice(groupIndex + 1)) {
-              for (const it of remainingItems) {
-                allFailed.push({
-                  sku: it.r.sku,
-                  status: "DEFERRED_RATE_LIMIT",
-                  reason: "Not submitted — Walmart rate limit was reached. Rerun these SKUs later.",
-                });
-              }
-            }
-            lastStatus = "rate_limited";
-            break;
-          }
-          continue;
+          allSubmits.push({ error: msg, rateLimited });
+          lastStatus = rateLimited ? "rate_limited" : "submit_error";
+          submitFailed = true;
         }
-        actualSubmittedCount += items.length;
-        const feedId: string | null =
-          submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
+      }
+      let feedId: string | null = null;
+      if (!skipSubmit && !submitFailed) {
+        actualSubmittedCount = items.length;
+        feedId = submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
         if (feedId) allFeedIds.push(feedId);
-        allSubmits.push({ subCategory, feedId, raw: submitRes });
+        allSubmits.push({ feedId, raw: submitRes });
+      }
 
-        if (feedId && shouldPollStatus) {
-          const MAX_ATTEMPTS = 8;
-          const DELAY_MS = 5000;
-          for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            try {
-              statusPayload = await walmartApi.getFeedStatus(feedId, true);
-            } catch (e) {
-              console.warn(
-                `[WFS:convert] getFeedStatus attempt ${attempt + 1} failed`,
-                e instanceof Error ? e.message : e
-              );
-            }
-            const fs = String(statusPayload?.feedStatus ?? "").toUpperCase();
-            if (fs && fs !== "RECEIVED" && fs !== "INPROGRESS") break;
-            if (attempt < MAX_ATTEMPTS - 1) {
-              await new Promise((res) => setTimeout(res, DELAY_MS));
-            } else {
-              timedOut = true;
-            }
+
+
+      if (feedId) {
+        const MAX_ATTEMPTS = 8;
+        const DELAY_MS = 5000;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+          try {
+            statusPayload = await walmartApi.getFeedStatus(feedId, true);
+          } catch (e) {
+            console.warn(
+              `[WFS:convert] getFeedStatus attempt ${attempt + 1} failed`,
+              e instanceof Error ? e.message : e
+            );
           }
-        } else if (feedId) {
-          timedOut = true;
+          const fs = String(statusPayload?.feedStatus ?? "").toUpperCase();
+          if (fs && fs !== "RECEIVED" && fs !== "INPROGRESS") break;
+          if (attempt < MAX_ATTEMPTS - 1) {
+            await new Promise((res) => setTimeout(res, DELAY_MS));
+          } else {
+            timedOut = true;
+          }
         }
-        if (timedOut) anyTimedOut = true;
-        allStatuses.push({ subCategory, feedId, status: statusPayload, timedOut });
-        lastStatus = statusPayload?.feedStatus ?? submitRes?.feedStatus ?? lastStatus;
+      }
+      if (timedOut) anyTimedOut = true;
+      allStatuses.push({ feedId, status: statusPayload, timedOut });
+      lastStatus = statusPayload?.feedStatus ?? submitRes?.feedStatus ?? lastStatus;
 
-        aggReceived += Number(statusPayload?.itemsReceived ?? 0);
-        aggSucceeded += Number(statusPayload?.itemsSucceeded ?? 0);
-        aggFailed += Number(statusPayload?.itemsFailed ?? 0);
+      aggReceived += Number(statusPayload?.itemsReceived ?? 0);
+      aggSucceeded += Number(statusPayload?.itemsSucceeded ?? 0);
+      aggFailed += Number(statusPayload?.itemsFailed ?? 0);
 
-        // Capture top-level ingestionErrors that aren't tied to a SKU.
-        const topErrs: any[] =
-          statusPayload?.ingestionErrors?.ingestionError ??
-          statusPayload?.ingestionErrors ??
-          [];
-        for (const e of Array.isArray(topErrs) ? topErrs : []) {
+      const topErrs: any[] =
+        statusPayload?.ingestionErrors?.ingestionError ??
+        statusPayload?.ingestionErrors ??
+        [];
+      for (const e of Array.isArray(topErrs) ? topErrs : []) {
+        allErrs.push({
+          type: e?.type ?? e?.errorType,
+          description: e?.description ?? e?.errorDescription ?? e?.message,
+        });
+      }
+
+      const itemDetails: any[] =
+        statusPayload?.itemDetails?.itemIngestionStatus ??
+        statusPayload?.itemDetails ??
+        [];
+      const seen = new Set<string>();
+      for (const d of Array.isArray(itemDetails) ? itemDetails : []) {
+        const sku: string = d?.sku ?? d?.martSku ?? "";
+        if (sku) seen.add(sku);
+        const ingestionStatus: string = String(
+          d?.ingestionStatus ?? d?.status ?? ""
+        ).toUpperCase();
+        const ingErrs: any[] =
+          d?.ingestionErrors?.ingestionError ?? d?.ingestionErrors ?? [];
+        const errList = Array.isArray(ingErrs) ? ingErrs : [];
+
+        if (ingestionStatus === "PROCESSED" || ingestionStatus === "SUCCESS") {
+          if (sku) allSuccess.push(sku);
+        } else if (sku) {
+          const firstErr = errList[0];
+          allFailed.push({
+            sku,
+            status: ingestionStatus || "ERROR",
+            reason:
+              firstErr?.description ??
+              firstErr?.errorDescription ??
+              firstErr?.message ??
+              "No error description provided",
+          });
+        }
+
+        for (const e of errList) {
           allErrs.push({
+            sku: sku || undefined,
             type: e?.type ?? e?.errorType,
             description: e?.description ?? e?.errorDescription ?? e?.message,
           });
         }
-
-        const itemDetails: any[] =
-          statusPayload?.itemDetails?.itemIngestionStatus ??
-          statusPayload?.itemDetails ??
-          [];
-        const seen = new Set<string>();
-        for (const d of Array.isArray(itemDetails) ? itemDetails : []) {
-          const sku: string = d?.sku ?? d?.martSku ?? "";
-          if (sku) seen.add(sku);
-          const ingestionStatus: string = String(
-            d?.ingestionStatus ?? d?.status ?? ""
-          ).toUpperCase();
-          const ingErrs: any[] =
-            d?.ingestionErrors?.ingestionError ?? d?.ingestionErrors ?? [];
-          const errList = Array.isArray(ingErrs) ? ingErrs : [];
-
-          if (ingestionStatus === "PROCESSED" || ingestionStatus === "SUCCESS") {
-            if (sku) allSuccess.push(sku);
-          } else if (sku) {
-            const firstErr = errList[0];
+      }
+      const fsUp = String(statusPayload?.feedStatus ?? "").toUpperCase();
+      if (
+        (fsUp === "ERROR" || fsUp === "PROCESSED_WITH_ERROR") &&
+        Number(statusPayload?.itemsReceived ?? 0) === 0 &&
+        topErrs.length > 0
+      ) {
+        const desc =
+          topErrs[0]?.description ??
+          topErrs[0]?.errorDescription ??
+          topErrs[0]?.message ??
+          "Walmart rejected the feed";
+        for (const it of items) {
+          if (!seen.has(it.r.sku)) {
             allFailed.push({
-              sku,
-              status: ingestionStatus || "ERROR",
-              reason:
-                firstErr?.description ??
-                firstErr?.errorDescription ??
-                firstErr?.message ??
-                "No error description provided",
+              sku: it.r.sku,
+              status: "FEED_ERROR",
+              reason: desc,
             });
-          }
-
-          for (const e of errList) {
-            allErrs.push({
-              sku: sku || undefined,
-              type: e?.type ?? e?.errorType,
-              description: e?.description ?? e?.errorDescription ?? e?.message,
-            });
-          }
-        }
-        // If Walmart returned a system-level error (itemsReceived = 0) with
-        // no per-SKU details, surface that against every SKU in the group so
-        // the operator sees why they failed.
-        const fsUp = String(statusPayload?.feedStatus ?? "").toUpperCase();
-        if (
-          (fsUp === "ERROR" || fsUp === "PROCESSED_WITH_ERROR") &&
-          Number(statusPayload?.itemsReceived ?? 0) === 0 &&
-          topErrs.length > 0
-        ) {
-          const desc =
-            topErrs[0]?.description ??
-            topErrs[0]?.errorDescription ??
-            topErrs[0]?.message ??
-            "Walmart rejected the feed";
-          for (const it of items) {
-            if (!seen.has(it.r.sku)) {
-              allFailed.push({
-                sku: it.r.sku,
-                status: "FEED_ERROR",
-                reason: `${desc} (subCategory=${subCategory})`,
-              });
-            }
           }
         }
       }
