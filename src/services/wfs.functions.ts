@@ -2698,7 +2698,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     const { data: rows, error: readErr } = await supabaseAdmin
       .from("catalog_items")
       .select(
-        "sku, product_name, gtin, upc, brand, manufacturer, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
+        "sku, product_name, gtin, upc, condition, brand, manufacturer, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
       )
       .in("sku", data.skus);
     if (readErr) throw new Error(`catalog lookup failed: ${readErr.message}`);
