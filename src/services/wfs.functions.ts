@@ -2667,6 +2667,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               [it.visibleKey]: {
                 manufacturer,
                 ...(img ? { mainImageUrl: img } : {}),
+                californiaPropWarningText: "No Warning Applicable",
+                californiaPropWarningType: "no_warning_applicable",
               },
             },
             Orderable: {
