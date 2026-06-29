@@ -1,31 +1,40 @@
-## Bulk Convert to WFS — Catalog sub-tab
+# Move WFS Convert to current Omni Spec 5.0
 
-Add a tabbed view inside `/catalog` so you can keep today's identifiers table and add a new bulk-conversion workflow.
+## Goal
+Stop hand-coding the OMNI_WFS payload against an old snapshot. Make the payload builder read Walmart's live JSON schema (Omni Spec 5.0, currently build `5.0.20260205-21_38_48`) and only send fields/enums that the current spec actually defines for each product type.
 
-### Tabs
-- **Identifiers** — current table, filters, export (unchanged).
-- **Bulk Convert to WFS** — new view scoped to Seller Fulfilled items.
+## Step 1 — Pull the current spec and diff it (read-only, no code yet)
+- For OMNI_WFS overall, and for the top product types we've actually been submitting (taken from `wfs_conversion_runs` history), call `walmartApi.getFeedSpec("OMNI_WFS", <productType>)`.
+- Save each schema + the spec build version Walmart returns.
+- Produce a diff report at `docs/wfs-spec-diff-<date>.md` listing, per productType:
+  - **Required attributes** in 5.0 that we never send
+  - **Field names** we send that are not in the 5.0 schema (today these are silently swallowed by `WALMART_REJECTED_OMNI_WFS_KEYS`)
+  - **Enum values** where our defaults (`"No Warning Applicable"`, `"None"`, `"Does Not Contain a Battery"`, `"US - United States"`, `"fbw"`, etc.) no longer match 5.0
+  - **Renames** (e.g. Prop 65 key name per category, country-of-origin field, battery field)
+- Deliver the report to you before any code change. You approve → step 2.
 
-### Bulk Convert tab — UX
-1. **Auto-filter**: only `Seller Fulfilled` + `Seller Fulfilled (WFS eligible)` items. Walmart Fulfilled and Unknown are hidden.
-2. **SDS filter row** (default: hide `Likely required` and `Possibly required`, so you start with the safe-to-convert pool). Toggleable.
-3. **Search + bulk select** (header checkbox, per-row checkbox, "select all on filtered view").
-4. **Per-row warning badge** if SDS = Likely/Possibly required so you can't silently include them.
-5. **Convert button** (disabled until ≥1 row selected) → confirmation modal showing count + a final SDS warning if any flagged rows are selected.
-6. **Result panel**: shows feedId, accepted/rejected counts, per-SKU errors returned by Walmart.
+## Step 2 — Make the payload builder spec-driven
+Refactor `submitWfsConversion` in `src/services/wfs.functions.ts`:
+- Load the spec once per (feedType, productType) at run start, cache for the run, **record the spec build version on the `wfs_conversion_runs` row**.
+- Replace the hand-rolled `Visible` / `Orderable` / `TradeItem` object literals with a builder that:
+  - Walks `Visible.<ProductType>.required[]` from the live schema and fills each one from our known sources (image, brand, price, Prop 65 text = `"None"`, country of origin, dimensions, weight, etc.) **using the live field name from the schema** — no more hard-coded keys like `prop65WarningText` or `californiaPropWarningText`.
+  - Drops anything not present in the live schema, so we can delete `WALMART_REJECTED_OMNI_WFS_KEYS` entirely.
+  - Validates enum values against the schema and substitutes the closest allowed value (or fails preflight with a clear "value X not in enum [...]" message).
+- Header stays `version: "1.4"`, `sellingChannel: "fbw"`, `processMode: "REPLACE"`, `subset: "EXTERNAL"` unless the spec diff says otherwise.
 
-### Server side
-- New `submitWfsConversion` server fn (POST), input: `{ skus: string[] }` (max 500/run, Zod-validated).
-- Loads each SKU's cached row from `catalog_items` (sku, productName, gtin/upc) to build the feed payload.
-- Calls Walmart **`POST /v3/feeds?feedType=MP_WFS_ITEM`** with a multipart JSON body — minimum fields per SKU: `sku`, `productIdentifiers` (GTIN/UPC), `productName`. Uses existing `getWalmartAccessToken()` + `WALMART_API_BASE_URL`.
-- Polls `GET /v3/feeds/{feedId}` once to capture initial status; returns `feedId`, `feedStatus`, `itemsReceived`, `itemsSucceeded`, `itemsFailed`, and any `ingestionErrors`.
-- Persists a log row in a new `wfs_conversion_runs` table (feed_id, submitted_at, sku_count, status, raw_response_json) so you can revisit past attempts.
+## Step 3 — Surface the version in the UI and run log
+- Show "Spec: OMNI_WFS · build 5.0.<…> · header v1.4" in the Bulk Convert tab footer.
+- Add `spec_version` column to `wfs_conversion_runs` (migration with GRANTs) so we can answer "which spec build did this feed go out against?" later.
 
-### Important caveat (will be surfaced in the UI)
-Walmart's WFS item feed often requires extra attributes (weight, dimensions, hazmat flag, country of origin) for each SKU. The catalog cache doesn't store those. The first run will likely come back with `itemsFailed > 0` and per-SKU errors listing missing fields. The result panel will show those errors verbatim so you know exactly what to fix in Seller Center / next iteration. If you'd rather collect those fields first (weight/dims editor per SKU before submit), say so and I'll add an editable step before the API call.
+## Step 4 — Lock in freshness
+- Add a small server function `refreshOmniWfsSpec()` that refetches the spec for the cached product types and surfaces in the UI when Walmart rolls a new build. No automatic re-deploy needed; we just see the badge change and re-run the diff.
 
-### Files
-- `src/routes/catalog.tsx` — split into tabs (`Tabs` from shadcn), extract current view into `<IdentifiersTab>`, add `<BulkConvertTab>`.
-- `src/services/wfs.functions.ts` — add `submitWfsConversion` + helper to build feed payload.
-- `src/services/walmartApi.ts` — add `submitWfsItemFeed(payload)` + `getFeedStatus(feedId)`.
-- New migration: `wfs_conversion_runs` table (id, feed_id, sku_count, status, response jsonb, created_at) with RLS + GRANTs.
+## Out of scope
+- Changing `feedType` (stays `OMNI_WFS`).
+- Changing header `version: "1.4"`.
+- Rewriting category bucketing / subCategory aliases.
+
+## Deliverable order
+1. Spec diff report (read-only, you review).
+2. Refactor + migration + UI badge (one build pass).
+3. Optional spec-refresh button.

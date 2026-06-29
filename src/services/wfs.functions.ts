@@ -2631,7 +2631,7 @@ async function loadSpecIndex(
   const cacheKey = `${feedType}::${productType ?? ""}`;
   if (specCache.has(cacheKey)) return specCache.get(cacheKey) ?? null;
   try {
-    const raw = await walmartApi.getFeedSpec(feedType, productType);
+    const raw = await walmartApi.getFeedSpec(feedType, productType ? [productType] : []);
     const schema = raw?.payload ?? raw?.schema ?? raw;
     const index = indexSpecSchema(schema);
     if (index.allowedKeys.size === 0) {
