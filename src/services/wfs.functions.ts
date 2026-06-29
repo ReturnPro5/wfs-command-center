@@ -2307,13 +2307,37 @@ function genRequestId(): string {
 // a transient spec-API outage doesn't block conversions.
 type SpecIndex = {
   allowedKeys: Set<string>;
+  allowedKeysByBlock: Map<string, Set<string>>;
   requiredByBlock: Map<string, Set<string>>;
+  openBlocks: Set<string>;
 };
+
+const SPEC_ROOT_BLOCK = "(root)";
+
+// Keys Walmart has explicitly rejected for OMNI_WFS in live feed responses.
+// Keep these out even if a broad/shared spec contains the name somewhere else.
+const WALMART_REJECTED_OMNI_WFS_KEYS = new Set([
+  "isProp65WarningRequired",
+  "prop65WarningRequired",
+  "californiaPropositionWarningMessage",
+  "californiaPropositionWarningType",
+  "hasWarning",
+  "warningText",
+]);
 
 function indexSpecSchema(schema: any): SpecIndex {
   const allowedKeys = new Set<string>();
+  const allowedKeysByBlock = new Map<string, Set<string>>();
   const requiredByBlock = new Map<string, Set<string>>();
+  const openBlocks = new Set<string>();
   const seen = new WeakSet<object>();
+
+  const addBlockKeys = (blockName: string | null, keys: string[]) => {
+    const block = blockName ?? SPEC_ROOT_BLOCK;
+    const set = allowedKeysByBlock.get(block) ?? new Set<string>();
+    for (const k of keys) set.add(k);
+    allowedKeysByBlock.set(block, set);
+  };
 
   function walk(node: any, blockName: string | null) {
     if (!node || typeof node !== "object") return;
@@ -2323,6 +2347,7 @@ function indexSpecSchema(schema: any): SpecIndex {
     if (node.properties && typeof node.properties === "object") {
       const keys = Object.keys(node.properties);
       for (const k of keys) allowedKeys.add(k);
+      addBlockKeys(blockName, keys);
       if (blockName && Array.isArray(node.required)) {
         const set = requiredByBlock.get(blockName) ?? new Set<string>();
         for (const r of node.required) set.add(String(r));
@@ -2336,6 +2361,9 @@ function indexSpecSchema(schema: any): SpecIndex {
         for (const sub of node[combinator]) walk(sub, blockName);
       }
     }
+    if (node.additionalProperties || node.patternProperties) {
+      openBlocks.add(blockName ?? SPEC_ROOT_BLOCK);
+    }
     if (node.items) walk(node.items, blockName);
     if (node.definitions && typeof node.definitions === "object") {
       for (const [k, v] of Object.entries(node.definitions)) walk(v, k);
@@ -2346,7 +2374,7 @@ function indexSpecSchema(schema: any): SpecIndex {
   }
 
   walk(schema, null);
-  return { allowedKeys, requiredByBlock };
+  return { allowedKeys, allowedKeysByBlock, requiredByBlock, openBlocks };
 }
 
 function validatePayloadAgainstSpec(
@@ -2366,7 +2394,14 @@ function validatePayloadAgainstSpec(
     const keys = Object.keys(node);
     for (const k of keys) {
       if (ALWAYS_OK.has(k)) continue;
-      if (!index.allowedKeys.has(k)) unknownKeys.add(`${blockName ?? "(root)"} → ${k}`);
+      const currentBlock = blockName ?? SPEC_ROOT_BLOCK;
+      const allowedForBlock = index.allowedKeysByBlock.get(currentBlock);
+      const rejected = WALMART_REJECTED_OMNI_WFS_KEYS.has(k);
+      const unknownForBlock =
+        allowedForBlock && !index.openBlocks.has(currentBlock)
+          ? !allowedForBlock.has(k)
+          : !index.allowedKeys.has(k);
+      if (rejected || unknownForBlock) unknownKeys.add(`${currentBlock} → ${k}`);
     }
     if (blockName) {
       const req = index.requiredByBlock.get(blockName);
@@ -2631,7 +2666,6 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
             Visible: {
               [it.visibleKey]: {
                 manufacturer,
-                isProp65WarningRequired: "No",
                 ...(img ? { mainImageUrl: img } : {}),
               },
             },
