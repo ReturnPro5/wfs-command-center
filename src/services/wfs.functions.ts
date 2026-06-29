@@ -2332,6 +2332,150 @@ const WALMART_REJECTED_OMNI_WFS_KEYS = new Set([
 // inconsistent for OMNI_WFS, so keep this as a hard fallback/default.
 const WALMART_REQUIRED_PROP65_TEXT_KEY = "prop65WarningText";
 
+// OMNI_WFS accepts broad SupplierItemFeedHeader.subCategory values, not every
+// leaf product type from the item report. Keep the item Visible block on the
+// real productType, but normalize the feed header so Walmart doesn't reject
+// values like `portable_speakers`, `laptop_computers`, or `cell_phone_cases`.
+const OMNI_WFS_ALLOWED_SUBCATEGORIES = new Set([
+  "cases_and_bags",
+  "building_supply",
+  "computer_components",
+  "health_and_beauty_electronics",
+  "furniture_other",
+  "decorations_and_favors",
+  "hardware",
+  "child_car_seats",
+  "food_and_beverage_other",
+  "electronics_other",
+  "electronics_cables",
+  "plumbing_and_hvac",
+  "video_games",
+  "other_other",
+  "safety_and_emergency",
+  "jewelry_other",
+  "tools",
+  "sport_and_recreation_other",
+  "carriers_and_accessories_other",
+  "animal_food",
+  "baby_toys",
+  "cleaning_and_chemical",
+  "ceremonial_clothing_and_accessories",
+  "music_cases_and_bags",
+  "computers",
+  "grills_and_outdoor_cooking",
+  "personal_care",
+  "bedding",
+  "storage",
+  "animal_accessories",
+  "baby_food",
+  "electrical",
+  "medical_aids",
+  "music",
+  "art_and_craft_other",
+  "medicine_and_supplements",
+  "toys_other",
+  "wheels_and_wheel_components",
+  "footwear_other",
+  "animal_health_and_grooming",
+  "video_projectors",
+  "cameras_and_lenses",
+  "sound_and_recording",
+  "watercraft",
+  "funeral",
+  "watches_other",
+  "large_appliances",
+  "baby_furniture",
+  "costumes",
+  "instrument_accessories",
+  "optical",
+  "home_other",
+  "cycling",
+  "gift_supply_and_awards",
+  "fuels_and_lubricants",
+  "baby_other",
+  "vehicle_other",
+  "animal_other",
+  "optics",
+  "garden_and_patio_other",
+  "cell_phones",
+  "musical_instruments",
+  "printers_scanners_and_imaging",
+  "movies",
+  "office_other",
+  "tvs_and_video_displays",
+  "baby_clothing",
+  "tools_and_hardware_other",
+  "electronics_accessories",
+  "vehicle_parts_and_accessories",
+  "land_vehicles",
+  "clothing_other",
+  "photo_accessories",
+  "software",
+]);
+
+const OMNI_WFS_SUBCATEGORY_ALIASES: Record<string, string> = {
+  portable_speakers: "sound_and_recording",
+  bluetooth_speakers: "sound_and_recording",
+  speakers: "sound_and_recording",
+  headphones: "sound_and_recording",
+  headsets: "sound_and_recording",
+  earbuds: "sound_and_recording",
+  laptop_computers: "computers",
+  desktop_computers: "computers",
+  tablet_computers: "computers",
+  computer_monitors: "tvs_and_video_displays",
+  monitors: "tvs_and_video_displays",
+  televisions: "tvs_and_video_displays",
+  tvs: "tvs_and_video_displays",
+  cell_phone_cases: "electronics_accessories",
+  phone_cases: "electronics_accessories",
+  smart_watches: "watches_other",
+  surveillance_cameras: "cameras_and_lenses",
+  security_cameras: "cameras_and_lenses",
+  digital_cameras: "cameras_and_lenses",
+  luggage_luggage_sets: "cases_and_bags",
+  luggage_sets: "cases_and_bags",
+  suitcases: "cases_and_bags",
+  cookware_sets: "home_other",
+  cookware: "home_other",
+  air_fryers: "home_other",
+  vacuum_cleaners: "home_other",
+  action_figures: "toys_other",
+  furnace_filters: "plumbing_and_hvac",
+  air_filters: "plumbing_and_hvac",
+};
+
+function normalizeOmniWfsToken(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function chooseOmniWfsSubCategory(...values: unknown[]): string {
+  const candidates = values.map(normalizeOmniWfsToken).filter(Boolean);
+  for (const c of candidates) {
+    if (OMNI_WFS_ALLOWED_SUBCATEGORIES.has(c)) return c;
+  }
+  for (const c of candidates) {
+    const mapped = OMNI_WFS_SUBCATEGORY_ALIASES[c];
+    if (mapped) return mapped;
+    if (c.includes("speaker") || c.includes("headphone") || c.includes("headset") || c.includes("earbud")) return "sound_and_recording";
+    if (c.includes("monitor") || c.includes("television") || c === "tv" || c.includes("_tv")) return "tvs_and_video_displays";
+    if (c.includes("laptop") || c.includes("tablet") || c.includes("computer")) return "computers";
+    if (c.includes("phone") && (c.includes("case") || c.includes("accessor"))) return "electronics_accessories";
+    if (c.includes("cell_phone") || c.includes("mobile_phone")) return "cell_phones";
+    if (c.includes("watch")) return "watches_other";
+    if (c.includes("camera")) return "cameras_and_lenses";
+    if (c.includes("luggage") || c.includes("suitcase") || c.includes("bag")) return "cases_and_bags";
+    if (c.includes("toy") || c.includes("figure")) return "toys_other";
+    if (c.includes("filter") || c.includes("furnace") || c.includes("hvac")) return "plumbing_and_hvac";
+    if (c.includes("cookware") || c.includes("fryer") || c.includes("vacuum")) return "home_other";
+  }
+  return "other_other";
+}
+
 // Inspect the indexed spec for the given Visible productType block and find
 // the actual Prop 65 field names Walmart wants for THIS product type. Names
 // drift between product types (some use prop65WarningText, some use
@@ -2533,7 +2677,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     const { data: rows, error: readErr } = await supabaseAdmin
       .from("catalog_items")
       .select(
-        "sku, product_name, gtin, upc, brand, manufacturer, main_image_url, price, currency, product_type, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
+        "sku, product_name, gtin, upc, brand, manufacturer, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
       )
       .in("sku", data.skus);
     if (readErr) throw new Error(`catalog lookup failed: ${readErr.message}`);
@@ -2615,8 +2759,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       }
       const sds = classifySds(r.product_name);
       const isHazmat = sds.requirement === "Likely required";
-      const subCategory =
-        slug(r.sub_category) || slug(r.product_type) || "general";
+      const subCategory = chooseOmniWfsSubCategory(r.sub_category, r.product_type, r.category);
       const visibleKey = String(r.product_type).trim();
       ready.push({
         r,
@@ -2634,33 +2777,21 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
 
     }
 
-    // Group ready items by subCategory — Walmart accepts only ONE
-    // subCategory per OMNI_WFS feed, so we fan out one submission per
-    // group. Cap the fan-out at 10 distinct groups per run so a single
-    // submit doesn't flood Walmart's feed queue.
+    // Group ready items by normalized WFS subCategory — Walmart accepts only
+    // ONE header subCategory per OMNI_WFS feed, so we fan out one submission
+    // per group. Allow Walmart's documented 20-category run size; do not
+    // silently skip the smaller categories.
     const groups = new Map<string, Ready[]>();
     for (const item of ready) {
       const list = groups.get(item.subCategory) ?? [];
       list.push(item);
       groups.set(item.subCategory, list);
     }
-    const MAX_GROUPS = 10;
+    const MAX_GROUPS = 20;
     if (groups.size > MAX_GROUPS) {
-      const overflow: string[] = [];
-      const sorted = Array.from(groups.entries()).sort(
-        (a, b) => b[1].length - a[1].length
+      throw new Error(
+        `Selection spans ${groups.size} WFS subCategories. Walmart accepts max ${MAX_GROUPS} per run — filter by category/subCategory first.`
       );
-      for (const [g] of sorted.slice(MAX_GROUPS)) overflow.push(g);
-      for (const g of overflow) {
-        for (const item of groups.get(g) ?? []) {
-          preflightFailed.push({
-            sku: item.r.sku,
-            status: "DEFERRED",
-            reason: `Skipped — selection spans ${groups.size} subCategories, only the largest ${MAX_GROUPS} were sent this run (subCategory=${g})`,
-          });
-        }
-        groups.delete(g);
-      }
     }
 
     const submittedCount = Array.from(groups.values()).reduce(
@@ -2714,23 +2845,32 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     let lastStatus = "submitted";
 
     try {
-      for (const [subCategory, items] of groups) {
+      const groupEntries = Array.from(groups.entries());
+      for (let groupIndex = 0; groupIndex < groupEntries.length; groupIndex++) {
+        const [subCategory, items] = groupEntries[groupIndex];
+        if (groupIndex > 0 && groupEntries.length > 3) {
+          await new Promise((res) => setTimeout(res, 1500));
+        }
         // Load spec FIRST so we can derive the right Prop 65 field names
         // (which vary per productType) before building the payload.
+        const visibleKeys = new Set(items.map((i) => i.visibleKey).filter(Boolean));
         const probeProductType = items[0]?.visibleKey;
-        const specIndex = await loadSpecIndex(feedType, probeProductType);
-        const prop65 = specIndex && probeProductType
-          ? findProp65Fields(specIndex, probeProductType)
-          : { textKey: WALMART_REQUIRED_PROP65_TEXT_KEY, typeKey: null };
+        const specIndex = await loadSpecIndex(
+          feedType,
+          visibleKeys.size === 1 ? probeProductType : undefined
+        );
 
         const supplierItems = items.map((it) => {
           const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
           const img = String(r.main_image_url ?? "").trim();
+          const prop65 = specIndex && it.visibleKey
+            ? findProp65Fields(specIndex, it.visibleKey)
+            : { textKey: WALMART_REQUIRED_PROP65_TEXT_KEY, typeKey: null };
           const propBlock: Record<string, string> = {
             // Walmart's feed status returns `field: prop65WarningText` for the
             // required "California Prop 65 Warning Text" attribute. Submit that
             // exact API key every time; the spec endpoint may be absent/stale.
-            [WALMART_REQUIRED_PROP65_TEXT_KEY]: "None",
+            [prop65.textKey ?? WALMART_REQUIRED_PROP65_TEXT_KEY]: "None",
           };
           if (prop65.typeKey) propBlock[prop65.typeKey] = "no_warning_applicable";
           return {
@@ -2849,8 +2989,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         allSubmits.push({ subCategory, feedId, raw: submitRes });
 
         if (feedId) {
-          const MAX_ATTEMPTS = 8;
-          const DELAY_MS = 5000;
+          const MAX_ATTEMPTS = groupEntries.length > 3 ? 1 : 8;
+          const DELAY_MS = groupEntries.length > 3 ? 3000 : 5000;
           for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             try {
               statusPayload = await walmartApi.getFeedStatus(feedId, true);
@@ -2933,7 +3073,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         const fsUp = String(statusPayload?.feedStatus ?? "").toUpperCase();
         if (
           (fsUp === "ERROR" || fsUp === "PROCESSED_WITH_ERROR") &&
-          aggReceived === 0 &&
+          Number(statusPayload?.itemsReceived ?? 0) === 0 &&
           topErrs.length > 0
         ) {
           const desc =
@@ -2969,14 +3109,16 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         })
         .eq("id", runId);
 
+      const returnedFailedCount = preflightFailed.length + Math.max(aggFailed, allFailed.length);
+
       return {
         runId,
-        feedId: allFeedIds[0] ?? null,
+        feedId: allFeedIds.join(",") || null,
         status: lastStatus,
         submittedCount,
         itemsReceived: aggReceived,
         itemsSucceeded: aggSucceeded,
-        itemsFailed: aggFailed + preflightFailed.length,
+        itemsFailed: returnedFailedCount,
         successSkus: allSuccess,
         failedItems: [...preflightFailed, ...allFailed],
         ingestionErrors: allErrs,
