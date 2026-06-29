@@ -390,18 +390,8 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       if (skus.length > 500) {
         throw new Error("Walmart limits each submission to 500 SKUs. Narrow your selection.");
       }
-      // Walmart's OMNI_WFS feed caps each submission at 20 distinct
-      // categories. Block early with a clear message so the operator narrows
-      // by category before sending.
-      const cats = new Set<string>();
-      const bySku = new Map(eligibleAll.map((r) => [r.sku, r] as const));
-      for (const sku of skus) {
-        const r = bySku.get(sku);
-        cats.add((r?.category ?? "").trim() || "Uncategorized");
-      }
-      if (cats.size > 20) {
-        throw new Error(`Selection spans ${cats.size} categories. Walmart accepts max 20 per feed — filter by category first.`);
-      }
+      // The server normalizes Walmart's leaf product types into the allowed
+      // OMNI_WFS feed subCategories before enforcing the 20-group limit.
       const res = await submitWfsConversion({ data: { skus } });
       setResult(res);
       toast.success(
