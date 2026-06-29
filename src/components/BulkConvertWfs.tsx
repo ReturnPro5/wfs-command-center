@@ -833,7 +833,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           {result.failedItems.length > 0 && (
             <details className="mt-2" open>
               <summary className="cursor-pointer font-medium text-status-critical">
-                Failed / hazmat hold ({result.failedItems.length})
+                Failed / deferred ({result.failedItems.length})
               </summary>
               <ul className="mt-1 max-h-60 overflow-y-auto space-y-1 text-xs">
                 {result.failedItems.slice(0, 500).map((f) => (
