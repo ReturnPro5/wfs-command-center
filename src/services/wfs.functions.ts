@@ -2321,9 +2321,45 @@ const WALMART_REJECTED_OMNI_WFS_KEYS = new Set([
   "prop65WarningRequired",
   "californiaPropositionWarningMessage",
   "californiaPropositionWarningType",
+  "californiaPropWarningText",
+  "californiaPropWarningType",
   "hasWarning",
   "warningText",
 ]);
+
+// Inspect the indexed spec for the given Visible productType block and find
+// the actual Prop 65 field names Walmart wants for THIS product type. Names
+// drift between product types (some use prop65WarningText, some use
+// californiaProp65WarningText, etc.). Returns { textKey, typeKey } when
+// found, or nulls when this product type has no Prop 65 fields at all.
+function findProp65Fields(
+  index: SpecIndex,
+  visibleKey: string
+): { textKey: string | null; typeKey: string | null } {
+  const keys = new Set<string>();
+  // Look at the Visible block for this product type and any nested blocks.
+  const direct = index.allowedKeysByBlock.get(visibleKey);
+  if (direct) for (const k of direct) keys.add(k);
+  // Also look at any block whose name contains the productType (some specs
+  // expose blocks like `Visible.<productType>` or `<productType>Visible`).
+  for (const [block, set] of index.allowedKeysByBlock) {
+    if (block.toLowerCase().includes(visibleKey.toLowerCase())) {
+      for (const k of set) keys.add(k);
+    }
+  }
+  const list = Array.from(keys);
+  const matchProp = (k: string) =>
+    /prop(osition)?[_-]?65|californiaprop/i.test(k);
+  const isType = (k: string) => /type$/i.test(k);
+  const isText = (k: string) => /(text|message)$/i.test(k);
+  const candidates = list.filter(
+    (k) => matchProp(k) && !WALMART_REJECTED_OMNI_WFS_KEYS.has(k)
+  );
+  const textKey = candidates.find(isText) ?? null;
+  const typeKey = candidates.find(isType) ?? null;
+  return { textKey, typeKey };
+}
+
 
 function indexSpecSchema(schema: any): SpecIndex {
   const allowedKeys = new Set<string>();
@@ -2659,16 +2695,26 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
 
     try {
       for (const [subCategory, items] of groups) {
+        // Load spec FIRST so we can derive the right Prop 65 field names
+        // (which vary per productType) before building the payload.
+        const probeProductType = items[0]?.visibleKey;
+        const specIndex = await loadSpecIndex(feedType, probeProductType);
+        const prop65 = specIndex && probeProductType
+          ? findProp65Fields(specIndex, probeProductType)
+          : { textKey: null, typeKey: null };
+
         const supplierItems = items.map((it) => {
           const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
           const img = String(r.main_image_url ?? "").trim();
+          const propBlock: Record<string, string> = {};
+          if (prop65.textKey) propBlock[prop65.textKey] = "No Warning Applicable";
+          if (prop65.typeKey) propBlock[prop65.typeKey] = "no_warning_applicable";
           return {
             Visible: {
               [it.visibleKey]: {
                 manufacturer,
                 ...(img ? { mainImageUrl: img } : {}),
-                californiaPropWarningText: "No Warning Applicable",
-                californiaPropWarningType: "no_warning_applicable",
+                ...propBlock,
               },
             },
             Orderable: {
@@ -2706,6 +2752,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           };
         });
 
+
         const feedBody = {
           SupplierItemFeedHeader: {
             subCategory,
@@ -2719,13 +2766,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         };
 
         // Pre-submit validation against Walmart's published OMNI_WFS spec.
-        // Uses the productType of the first item in the group (all items in
-        // a feed share subCategory; productType is usually consistent inside
-        // a subCategory). If unknown keys or missing required fields are
-        // detected, fail every SKU in this group locally — do not ship a
-        // payload Walmart will reject.
-        const probeProductType = items[0]?.visibleKey;
-        const specIndex = await loadSpecIndex(feedType, probeProductType);
+        // specIndex/probeProductType were loaded above before building the
+        // payload so Prop 65 field names could be derived dynamically.
+
         if (specIndex) {
           const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
             feedBody,
