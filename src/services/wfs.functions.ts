@@ -2882,6 +2882,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         SupplierItem: supplierItems,
       };
 
+      let skipSubmit = false;
       if (specIndex) {
         const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
           feedBody,
@@ -2898,36 +2899,46 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
             allFailed.push({ sku: it.r.sku, status: "SPEC_VALIDATION", reason });
           }
           allSubmits.push({ error: "spec_validation_failed", unknownKeys, missingRequired });
-          throw new Error(reason);
+          lastStatus = "spec_validation_failed";
+          skipSubmit = true;
         }
       }
 
       let submitRes: any = null;
       let statusPayload: any = null;
       let timedOut = false;
-      try {
-        submitRes = await walmartApi.submitFeed(feedType, feedBody);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const rateLimited = /\b429\b|REQUEST_THRESHOLD|threshold|rate limit/i.test(msg);
-        for (const it of items) {
-          allFailed.push({
-            sku: it.r.sku,
-            status: rateLimited ? "RATE_LIMIT" : "SUBMIT_ERROR",
-            reason: rateLimited
-              ? `Walmart rate limit hit; rerun these SKUs later`
-              : `Feed submit failed: ${msg}`,
-          });
+      let submitFailed = false;
+      if (!skipSubmit) {
+        try {
+          submitRes = await walmartApi.submitFeed(feedType, feedBody);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const rateLimited = /\b429\b|REQUEST_THRESHOLD|threshold|rate limit/i.test(msg);
+          for (const it of items) {
+            allFailed.push({
+              sku: it.r.sku,
+              status: rateLimited ? "RATE_LIMIT" : "SUBMIT_ERROR",
+              reason: rateLimited
+                ? `Walmart rate limit hit; rerun these SKUs later`
+                : `Feed submit failed: ${msg}`,
+            });
+          }
+          allSubmits.push({ error: msg, rateLimited });
+          lastStatus = rateLimited ? "rate_limited" : "submit_error";
+          submitFailed = true;
         }
-        allSubmits.push({ error: msg, rateLimited });
-        lastStatus = rateLimited ? "rate_limited" : "submit_error";
-        throw e;
       }
-      actualSubmittedCount = items.length;
-      const feedId: string | null =
-        submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
-      if (feedId) allFeedIds.push(feedId);
-      allSubmits.push({ feedId, raw: submitRes });
+      if (!skipSubmit && !submitFailed) {
+        actualSubmittedCount = items.length;
+        const feedId: string | null =
+          submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
+        if (feedId) allFeedIds.push(feedId);
+        allSubmits.push({ feedId, raw: submitRes });
+      }
+      const feedId: string | null = !skipSubmit && !submitFailed
+        ? (submitRes?.feedId ?? submitRes?.payload?.feedId ?? null)
+        : null;
+
 
       if (feedId) {
         const MAX_ATTEMPTS = 8;
