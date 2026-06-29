@@ -433,22 +433,27 @@ export async function getFeedStatus(feedId: string, includeDetails = true): Prom
 }
 
 // ─── Feed Spec (schema) ─────────────────────────────────
-// Walmart publishes the JSON Schema for each feedType (and optionally per
-// productType) at /v3/feeds/spec. We use it to validate payload field names
-// BEFORE submitting so typos / mis-nesting fail fast locally.
-export async function getFeedSpec(feedType: string, productType?: string): Promise<any> {
-  const params = new URLSearchParams({ feedType });
-  if (productType) params.set("productType", productType);
-  // Try the documented path first; fall back to the older items/spec path.
-  try {
-    return await walmartFetch<any>(`/v3/feeds/spec?${params}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/404|CONTENT_NOT_FOUND|400/i.test(msg)) {
-      return walmartFetch<any>(`/v3/items/spec?${params}`);
-    }
-    throw err;
-  }
+// Walmart's Get Spec API: POST /v3/items/spec with JSON body.
+// Required body fields: feedType, version, productTypes[] (limit 20 per call,
+// PRODUCT TYPE DISPLAY NAMES like "Cell Phones", not snake_case).
+// Returns { schema } (JSON Schema draft-07) or 207 with { schema, errors[] }.
+// Throttled at 3 TPM per seller.
+// Current Omni Spec 5.0 build (March 2026): 5.0.20260205-21_38_48-api.
+export const OMNI_SPEC_VERSION =
+  process.env.WALMART_OMNI_SPEC_VERSION || "5.0.20260205-21_38_48-api";
+
+export async function getFeedSpec(
+  feedType: string,
+  productTypes: string[] = [],
+  version: string = OMNI_SPEC_VERSION
+): Promise<any> {
+  const body: Record<string, unknown> = { feedType, version };
+  if (productTypes.length > 0) body.productTypes = productTypes.slice(0, 20);
+  return walmartFetch<any>(`/v3/items/spec`, {
+    method: "POST",
+    headers: { "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" },
+    body: JSON.stringify(body),
+  });
 }
 
 
