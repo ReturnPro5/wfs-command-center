@@ -2830,14 +2830,21 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         const isMoviesOrMusic = ["movies", "music"].includes(
           it.visibleKey.toLowerCase()
         );
-        const netContent = Number(r.net_content) > 0 ? Number(r.net_content) : 1;
+        const netContentMeasure =
+          Number(r.net_content) > 0 ? Number(r.net_content) : 1;
         const condition = String(r.condition ?? "").trim() || "New";
+        // Suppress unused-var warning for manufacturer (kept in destructure for
+        // future use but not emitted — Walmart spec rejects the field).
+        void manufacturer;
         const visibleBlock: Record<string, unknown> = {
           productName: String(r.product_name).trim(),
-          ...(isMoviesOrMusic ? {} : { brand, manufacturer }),
+          ...(isMoviesOrMusic ? {} : { brand }),
           mainImageUrl: img,
           isProp65WarningRequired: "No",
-          netContent,
+          netContent: {
+            productNetContentMeasure: netContentMeasure,
+            productNetContentUnit: "Each",
+          },
           condition,
         };
         return {
