@@ -2751,6 +2751,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           reason: `Only Open Box items are eligible for Bulk Convert (this SKU is "${r.condition ?? "Unknown"}")`,
         });
         continue;
+      }
       const length = Number(r.shipping_length ?? 0);
       const width = Number(r.shipping_width ?? 0);
       const height = Number(r.shipping_height ?? 0);
