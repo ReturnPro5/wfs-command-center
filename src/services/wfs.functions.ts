@@ -2695,16 +2695,26 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
 
     try {
       for (const [subCategory, items] of groups) {
+        // Load spec FIRST so we can derive the right Prop 65 field names
+        // (which vary per productType) before building the payload.
+        const probeProductType = items[0]?.visibleKey;
+        const specIndex = await loadSpecIndex(feedType, probeProductType);
+        const prop65 = specIndex && probeProductType
+          ? findProp65Fields(specIndex, probeProductType)
+          : { textKey: null, typeKey: null };
+
         const supplierItems = items.map((it) => {
           const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
           const img = String(r.main_image_url ?? "").trim();
+          const propBlock: Record<string, string> = {};
+          if (prop65.textKey) propBlock[prop65.textKey] = "No Warning Applicable";
+          if (prop65.typeKey) propBlock[prop65.typeKey] = "no_warning_applicable";
           return {
             Visible: {
               [it.visibleKey]: {
                 manufacturer,
                 ...(img ? { mainImageUrl: img } : {}),
-                californiaPropWarningText: "No Warning Applicable",
-                californiaPropWarningType: "no_warning_applicable",
+                ...propBlock,
               },
             },
             Orderable: {
@@ -2741,6 +2751,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
 
           };
         });
+
 
         const feedBody = {
           SupplierItemFeedHeader: {
