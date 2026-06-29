@@ -398,6 +398,19 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       // OMNI_WFS feed subCategories before enforcing the 20-group limit.
       const res = await submitWfsConversion({ data: { skus } });
       setResult(res);
+      const succeeded = res.successSkus ?? [];
+      if (succeeded.length > 0) {
+        setConvertedSkus((prev) => {
+          const next = new Set(prev);
+          for (const s of succeeded) next.add(s);
+          return next;
+        });
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (const s of succeeded) next.delete(s);
+          return next;
+        });
+      }
       toast.success(
         `Submitted ${res.submittedCount.toLocaleString()} SKUs — feedId ${res.feedId ?? "(pending)"}, status ${res.status}`
       );
