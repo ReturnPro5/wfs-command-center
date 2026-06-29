@@ -2698,7 +2698,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     const { data: rows, error: readErr } = await supabaseAdmin
       .from("catalog_items")
       .select(
-        "sku, product_name, gtin, upc, brand, manufacturer, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
+        "sku, product_name, gtin, upc, condition, brand, manufacturer, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit"
       )
       .in("sku", data.skus);
     if (readErr) throw new Error(`catalog lookup failed: ${readErr.message}`);
@@ -2737,6 +2737,18 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           sku,
           status: "MISSING",
           reason: "SKU not found in cached catalog — re-sync catalog first",
+        });
+        continue;
+      }
+      // Bulk Convert only handles Open Box items — any other condition is
+      // rejected before we build the payload so we never trigger Walmart's
+      // "condition differs from Seller Catalog" error.
+      const condNorm = String(r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
+      if (condNorm !== "openbox") {
+        preflightFailed.push({
+          sku,
+          status: "INELIGIBLE_CONDITION",
+          reason: `Only Open Box items are eligible for Bulk Convert (this SKU is "${r.condition ?? "Unknown"}")`,
         });
         continue;
       }
@@ -2853,7 +2865,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         );
         const netContentMeasure =
           Number(r.net_content) > 0 ? Number(r.net_content) : 1;
-        const condition = normalizeWfsCondition(r.condition);
+        // We only convert Open Box items via Bulk Convert. Hardcoded so the
+        // payload's condition always matches the seller-catalog condition.
+        const condition = "Open Box";
         // Suppress unused-var warning for manufacturer (kept in destructure for
         // future use but not emitted — Walmart spec rejects the field).
         void manufacturer;
