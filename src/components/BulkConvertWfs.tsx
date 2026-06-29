@@ -262,18 +262,22 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok
 }
 
 export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
-  // Only seller-fulfilled items (any kind) are eligible. Walmart-fulfilled
-  // and Unknown items are excluded from this tab entirely.
+  // SKUs successfully converted in this session drop off the list immediately
+  // so we never resubmit them.
+  const [convertedSkus, setConvertedSkus] = useState<Set<string>>(new Set());
+
+  // Only "Seller Fulfilled" items are eligible. Walmart Fulfilled,
+  // "Seller Fulfilled (WFS Eligible)", and Unknown are excluded entirely.
   const eligibleAll: Row[] = useMemo(() => {
     return items
       .filter((r) => {
-        const f = r.fulfillment ?? "Unknown";
-        if (f !== "Seller Fulfilled" && f !== "Seller Fulfilled (WFS Eligible)") return false;
+        if ((r.fulfillment ?? "Unknown") !== "Seller Fulfilled") return false;
+        if (convertedSkus.has(r.sku)) return false;
         const cond = (r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
         return cond === "openbox";
       })
       .map((r) => ({ ...r, sds: classifySds(r.productName) }));
-  }, [items]);
+  }, [items, convertedSkus]);
 
   const [search, setSearch] = useState("");
   const [sdsFilter, setSdsFilter] = useState<SdsFilter>("Not required");
