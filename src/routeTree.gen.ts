@@ -19,6 +19,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SkuSkuRouteImport } from './routes/sku.$sku'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiDebugOrdersRouteImport } from './routes/api.debug-orders'
+import { Route as ApiPublicWfsSpecDumpRouteImport } from './routes/api/public/wfs-spec-dump'
 
 const SalesRoute = SalesRouteImport.update({
   id: '/sales',
@@ -70,6 +71,11 @@ const ApiDebugOrdersRoute = ApiDebugOrdersRouteImport.update({
   path: '/api/debug-orders',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicWfsSpecDumpRoute = ApiPublicWfsSpecDumpRouteImport.update({
+  id: '/api/public/wfs-spec-dump',
+  path: '/api/public/wfs-spec-dump',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -82,6 +88,7 @@ export interface FileRoutesByFullPath {
   '/api/debug-orders': typeof ApiDebugOrdersRoute
   '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
+  '/api/public/wfs-spec-dump': typeof ApiPublicWfsSpecDumpRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -94,6 +101,7 @@ export interface FileRoutesByTo {
   '/api/debug-orders': typeof ApiDebugOrdersRoute
   '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
+  '/api/public/wfs-spec-dump': typeof ApiPublicWfsSpecDumpRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -107,6 +115,7 @@ export interface FileRoutesById {
   '/api/debug-orders': typeof ApiDebugOrdersRoute
   '/api/health': typeof ApiHealthRoute
   '/sku/$sku': typeof SkuSkuRoute
+  '/api/public/wfs-spec-dump': typeof ApiPublicWfsSpecDumpRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -121,6 +130,7 @@ export interface FileRouteTypes {
     | '/api/debug-orders'
     | '/api/health'
     | '/sku/$sku'
+    | '/api/public/wfs-spec-dump'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -133,6 +143,7 @@ export interface FileRouteTypes {
     | '/api/debug-orders'
     | '/api/health'
     | '/sku/$sku'
+    | '/api/public/wfs-spec-dump'
   id:
     | '__root__'
     | '/'
@@ -145,6 +156,7 @@ export interface FileRouteTypes {
     | '/api/debug-orders'
     | '/api/health'
     | '/sku/$sku'
+    | '/api/public/wfs-spec-dump'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -158,6 +170,7 @@ export interface RootRouteChildren {
   ApiDebugOrdersRoute: typeof ApiDebugOrdersRoute
   ApiHealthRoute: typeof ApiHealthRoute
   SkuSkuRoute: typeof SkuSkuRoute
+  ApiPublicWfsSpecDumpRoute: typeof ApiPublicWfsSpecDumpRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -232,6 +245,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDebugOrdersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/wfs-spec-dump': {
+      id: '/api/public/wfs-spec-dump'
+      path: '/api/public/wfs-spec-dump'
+      fullPath: '/api/public/wfs-spec-dump'
+      preLoaderRoute: typeof ApiPublicWfsSpecDumpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -246,6 +266,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDebugOrdersRoute: ApiDebugOrdersRoute,
   ApiHealthRoute: ApiHealthRoute,
   SkuSkuRoute: SkuSkuRoute,
+  ApiPublicWfsSpecDumpRoute: ApiPublicWfsSpecDumpRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
