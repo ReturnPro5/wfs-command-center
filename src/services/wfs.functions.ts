@@ -2794,7 +2794,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       );
     }
 
-    const submittedCount = Array.from(groups.values()).reduce(
+    const readyToSubmitCount = Array.from(groups.values()).reduce(
       (n, list) => n + list.length,
       0
     );
@@ -2802,9 +2802,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     const { data: runRow, error: insErr } = await supabaseAdmin
       .from("wfs_conversion_runs")
       .insert({
-        sku_count: submittedCount,
+        sku_count: readyToSubmitCount,
         skus: Array.from(groups.values()).flat().map((i) => i.r.sku),
-        status: submittedCount === 0 ? "no_eligible" : "submitting",
+        status: readyToSubmitCount === 0 ? "no_eligible" : "submitting",
         response: {
           preflightFailed: preflightFailed as unknown as Record<string, unknown>[],
           subCategories: Array.from(groups.keys()),
@@ -2815,7 +2815,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     if (insErr) throw new Error(`conversion log insert failed: ${insErr.message}`);
     const runId = (runRow as any).id as string;
 
-    if (submittedCount === 0) {
+    if (readyToSubmitCount === 0) {
       return {
         runId,
         feedId: null,
@@ -2841,21 +2841,24 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     let aggReceived = 0;
     let aggSucceeded = 0;
     let aggFailed = 0;
+    let actualSubmittedCount = 0;
     let anyTimedOut = false;
     let lastStatus = "submitted";
 
     try {
       const groupEntries = Array.from(groups.entries());
+      const shouldPollStatus = groupEntries.length <= 3;
+      const sharedSpecIndex = groupEntries.length > 3 ? await loadSpecIndex(feedType) : null;
       for (let groupIndex = 0; groupIndex < groupEntries.length; groupIndex++) {
         const [subCategory, items] = groupEntries[groupIndex];
         if (groupIndex > 0 && groupEntries.length > 3) {
-          await new Promise((res) => setTimeout(res, 1500));
+          await new Promise((res) => setTimeout(res, 1000));
         }
         // Load spec FIRST so we can derive the right Prop 65 field names
         // (which vary per productType) before building the payload.
         const visibleKeys = new Set(items.map((i) => i.visibleKey).filter(Boolean));
         const probeProductType = items[0]?.visibleKey;
-        const specIndex = await loadSpecIndex(
+        const specIndex = sharedSpecIndex ?? await loadSpecIndex(
           feedType,
           visibleKeys.size === 1 ? probeProductType : undefined
         );
@@ -2973,24 +2976,41 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           submitRes = await walmartApi.submitFeed(feedType, feedBody);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          const rateLimited = /\b429\b|REQUEST_THRESHOLD|threshold|rate limit/i.test(msg);
           for (const it of items) {
             allFailed.push({
               sku: it.r.sku,
-              status: "SUBMIT_ERROR",
-              reason: `Feed submit failed for subCategory=${subCategory}: ${msg}`,
+              status: rateLimited ? "RATE_LIMIT" : "SUBMIT_ERROR",
+              reason: rateLimited
+                ? `Walmart rate limit hit while submitting subCategory=${subCategory}; rerun these SKUs later`
+                : `Feed submit failed for subCategory=${subCategory}: ${msg}`,
             });
           }
-          allSubmits.push({ subCategory, error: msg });
+          allSubmits.push({ subCategory, error: msg, rateLimited });
+          if (rateLimited) {
+            for (const [, remainingItems] of groupEntries.slice(groupIndex + 1)) {
+              for (const it of remainingItems) {
+                allFailed.push({
+                  sku: it.r.sku,
+                  status: "DEFERRED_RATE_LIMIT",
+                  reason: "Not submitted — Walmart rate limit was reached. Rerun these SKUs later.",
+                });
+              }
+            }
+            lastStatus = "rate_limited";
+            break;
+          }
           continue;
         }
+        actualSubmittedCount += items.length;
         const feedId: string | null =
           submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
         if (feedId) allFeedIds.push(feedId);
         allSubmits.push({ subCategory, feedId, raw: submitRes });
 
-        if (feedId) {
-          const MAX_ATTEMPTS = groupEntries.length > 3 ? 1 : 8;
-          const DELAY_MS = groupEntries.length > 3 ? 3000 : 5000;
+        if (feedId && shouldPollStatus) {
+          const MAX_ATTEMPTS = 8;
+          const DELAY_MS = 5000;
           for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             try {
               statusPayload = await walmartApi.getFeedStatus(feedId, true);
@@ -3008,6 +3028,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               timedOut = true;
             }
           }
+        } else if (feedId) {
+          timedOut = true;
         }
         if (timedOut) anyTimedOut = true;
         allStatuses.push({ subCategory, feedId, status: statusPayload, timedOut });
@@ -3096,6 +3118,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       await supabaseAdmin
         .from("wfs_conversion_runs")
         .update({
+          sku_count: actualSubmittedCount,
           feed_id: allFeedIds.join(",") || null,
           status: lastStatus,
           response: {
@@ -3109,15 +3132,16 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         })
         .eq("id", runId);
 
+      const polledAnyStatus = allStatuses.some((s) => s.status);
       const returnedFailedCount = preflightFailed.length + Math.max(aggFailed, allFailed.length);
 
       return {
         runId,
         feedId: allFeedIds.join(",") || null,
         status: lastStatus,
-        submittedCount,
-        itemsReceived: aggReceived,
-        itemsSucceeded: aggSucceeded,
+        submittedCount: actualSubmittedCount,
+        itemsReceived: polledAnyStatus ? aggReceived : null,
+        itemsSucceeded: polledAnyStatus ? aggSucceeded : null,
         itemsFailed: returnedFailedCount,
         successSkus: allSuccess,
         failedItems: [...preflightFailed, ...allFailed],
