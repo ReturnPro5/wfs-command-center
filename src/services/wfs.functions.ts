@@ -2721,13 +2721,17 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         const specIndex = await loadSpecIndex(feedType, probeProductType);
         const prop65 = specIndex && probeProductType
           ? findProp65Fields(specIndex, probeProductType)
-          : { textKey: null, typeKey: null };
+          : { textKey: WALMART_REQUIRED_PROP65_TEXT_KEY, typeKey: null };
 
         const supplierItems = items.map((it) => {
           const { r, gtin, isHazmat, length, width, height, weight, brand, manufacturer } = it;
           const img = String(r.main_image_url ?? "").trim();
-          const propBlock: Record<string, string> = {};
-          if (prop65.textKey) propBlock[prop65.textKey] = "None";
+          const propBlock: Record<string, string> = {
+            // Walmart's feed status returns `field: prop65WarningText` for the
+            // required "California Prop 65 Warning Text" attribute. Submit that
+            // exact API key every time; the spec endpoint may be absent/stale.
+            [WALMART_REQUIRED_PROP65_TEXT_KEY]: "None",
+          };
           if (prop65.typeKey) propBlock[prop65.typeKey] = "no_warning_applicable";
           return {
             Visible: {
