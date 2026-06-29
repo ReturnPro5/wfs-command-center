@@ -2853,7 +2853,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         );
         const netContentMeasure =
           Number(r.net_content) > 0 ? Number(r.net_content) : 1;
-        const condition = normalizeWfsCondition(r.condition);
+        // We only convert Open Box items via Bulk Convert. Hardcoded so the
+        // payload's condition always matches the seller-catalog condition.
+        const condition = "Open Box";
         // Suppress unused-var warning for manufacturer (kept in destructure for
         // future use but not emitted — Walmart spec rejects the field).
         void manufacturer;
