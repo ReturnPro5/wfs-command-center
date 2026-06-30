@@ -530,6 +530,10 @@ function CatalogPage() {
           <TabsContent value="convert">
             <BulkConvertWfs items={items} />
           </TabsContent>
+
+          <TabsContent value="convert-gtin">
+            <ConvertByGtin items={items} />
+          </TabsContent>
         </Tabs>
 
       </div>
