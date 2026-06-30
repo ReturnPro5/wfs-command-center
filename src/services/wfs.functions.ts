@@ -3004,6 +3004,15 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         });
         continue;
       }
+      // Only SKUs ending in "ND" suffix are eligible for WFS conversion.
+      if (!/ND$/i.test(sku)) {
+        preflightFailed.push({
+          sku,
+          status: "INELIGIBLE_SKU_SUFFIX",
+          reason: `Only SKUs ending in "ND" are eligible for Bulk Convert (got "${sku}")`,
+        });
+        continue;
+      }
       // Bulk Convert only handles Open Box items — any other condition is
       // rejected before we build the payload so we never trigger Walmart's
       // "condition differs from Seller Catalog" error. Blank/unknown is
