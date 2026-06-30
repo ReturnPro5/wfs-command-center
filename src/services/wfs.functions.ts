@@ -1808,6 +1808,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
 export interface ResolveIdentifierResult {
   resolved: CatalogIdentifier[];
   notFound: string[];
+  rateLimited: string[]; // hit 429 even after retries — retry these in another batch
   fetched: number; // how many were newly pulled from Walmart this call
 }
 
