@@ -127,48 +127,75 @@ export function ConvertByGtin({ items }: Props) {
 
       // Smaller chunks → progress moves more often, so the UI never feels stuck.
       const CHUNK = 50;
-      const total = unknown.length;
+      let queue = unknown.slice();
+      let total = queue.length;
       let fetchedTotal = 0;
       const notFoundAll: string[] = [];
       let resolvedCount = 0;
+      const rateLimitedAll = new Set<string>();
       setProgress({ done: 0, total, resolved: 0, notFound: 0 });
 
-      for (let i = 0; i < total; i += CHUNK) {
-        const batch = unknown.slice(i, i + CHUNK);
-        const res = await resolveIdentifiers({ data: { identifiers: batch } });
-        if (res.resolved.length > 0) {
-          setExtraItems((prev) => {
-            const next = new Map(prev);
-            for (const it of res.resolved) next.set(it.sku, it);
-            return next;
+      // Walmart's /v3/items throttles by short window; tokens that come back as
+      // rateLimited get re-queued for another pass with a cooldown so the operator
+      // doesn't see false "not found" results.
+      const MAX_PASSES = 3;
+      let pass = 0;
+      let done = 0;
+      while (queue.length > 0 && pass < MAX_PASSES) {
+        const passRetries: string[] = [];
+        for (let i = 0; i < queue.length; i += CHUNK) {
+          const batch = queue.slice(i, i + CHUNK);
+          const res = await resolveIdentifiers({ data: { identifiers: batch } });
+          if (res.resolved.length > 0) {
+            setExtraItems((prev) => {
+              const next = new Map(prev);
+              for (const it of res.resolved) next.set(it.sku, it);
+              return next;
+            });
+          }
+          if (res.notFound.length > 0) {
+            setKnownNotFound((prev) => {
+              const next = new Set(prev);
+              for (const t of res.notFound) next.add(t);
+              return next;
+            });
+          }
+          fetchedTotal += res.fetched;
+          resolvedCount += res.resolved.length;
+          notFoundAll.push(...res.notFound);
+          for (const t of res.rateLimited ?? []) {
+            rateLimitedAll.add(t);
+            passRetries.push(t);
+          }
+          done += batch.length - (res.rateLimited?.length ?? 0);
+          setProgress({
+            done: Math.min(done, total),
+            total,
+            resolved: resolvedCount,
+            notFound: notFoundAll.length,
           });
+          await new Promise((r) => setTimeout(r, 0));
         }
-        if (res.notFound.length > 0) {
-          setKnownNotFound((prev) => {
-            const next = new Set(prev);
-            for (const t of res.notFound) next.add(t);
-            return next;
-          });
+        queue = passRetries;
+        pass++;
+        if (queue.length > 0 && pass < MAX_PASSES) {
+          // Let the Walmart rate-limit window reset before the next pass.
+          toast.message(`Walmart rate-limited ${queue.length.toLocaleString()} lookups — retrying in 10s…`);
+          await new Promise((r) => setTimeout(r, 10000));
         }
-        fetchedTotal += res.fetched;
-        resolvedCount += res.resolved.length;
-        notFoundAll.push(...res.notFound);
-        setProgress({
-          done: Math.min(i + batch.length, total),
-          total,
-          resolved: resolvedCount,
-          notFound: notFoundAll.length,
-        });
-        // Yield to the event loop so React can repaint the progress bar.
-        await new Promise((r) => setTimeout(r, 0));
       }
+      // Anything still rate-limited after the final pass is left out of notFound
+      // so the operator can rerun the lookup without losing those tokens.
+      for (const t of queue) rateLimitedAll.add(t);
 
       setResolveSummary({ fetched: fetchedTotal, notFound: notFoundAll });
+      const stillRL = queue.length;
       toast.success(
         `Found ${resolvedCount.toLocaleString()} SKU(s) (newly pulled: ${fetchedTotal})${
           notFoundAll.length > 0 ? ` · ${notFoundAll.length} not in Walmart` : ""
-        }`
+        }${stillRL > 0 ? ` · ${stillRL} rate-limited (click Look up again)` : ""}`
       );
+
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
