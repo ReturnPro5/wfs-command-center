@@ -301,7 +301,18 @@ export function ConvertByGtin({ items }: Props) {
     setError(null);
     setProgress(null);
     try {
-      const unknown = tokens.filter((t) => !idMap.has(t) && !knownNotFound.has(t));
+      // Look up at Walmart for tokens that either have no cached match OR whose
+      // cached matches are all non-ND variants — the ND (Open Box) sibling may
+      // exist in Walmart but never made it into our sync (e.g. different
+      // lifecycle/publishedStatus bucket).
+      const hasEligibleCached = (t: string) => {
+        const hits = idMap.get(t);
+        if (!hits || hits.length === 0) return false;
+        return hits.some((it) => /ND$/i.test(it.sku));
+      };
+      const unknown = tokens.filter(
+        (t) => !hasEligibleCached(t) && !knownNotFound.has(t)
+      );
       const skipped = tokens.filter((t) => knownNotFound.has(t)).length;
       if (unknown.length === 0) {
         setResolveSummary({ fetched: 0, notFound: [] });
