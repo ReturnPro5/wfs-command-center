@@ -3147,7 +3147,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         // future use but not emitted — Walmart spec rejects the field).
         void manufacturer;
         const visibleBlock: Record<string, unknown> = {
-          productName: String(r.product_name).trim(),
+          productName: String(r.product_name).trim().slice(0, 199),
           ...(isMoviesOrMusic ? {} : { brand }),
           mainImageUrl: img,
           isProp65WarningRequired: "No",
