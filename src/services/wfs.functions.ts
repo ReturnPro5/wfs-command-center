@@ -1831,6 +1831,55 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     );
     if (tokens.length === 0) return { resolved: [], notFound: [], rateLimited: [], fetched: 0, matchedByToken: {} };
 
+    const hasNdSku = (rows: any[] | undefined) =>
+      (rows ?? []).some((r) => /ND$/i.test(String(r?.sku ?? r?.SKU ?? r?.mart_sku ?? "")));
+
+    const normalizeProductNameForSibling = (name: string): string =>
+      name
+        .toLowerCase()
+        .replace(/^pre-owned\s*:\s*(like new|very good|good|acceptable)\s+/i, "")
+        .replace(/^(open box|pre-owned|pre owned|used|refurbished|new)\b[:\s-]*/i, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+
+    const identifierVariants = (token: string): string[] => {
+      const variants = new Set<string>([token]);
+      const trimmed = token.replace(/^0+/, "");
+      if (trimmed) variants.add(trimmed);
+      if (token.length > 12) variants.add(token.slice(-12));
+      if (token.length > 13) variants.add(token.slice(-13));
+      if (token.length === 12) variants.add(`00${token}`);
+      if (token.length === 13) variants.add(`0${token}`);
+      return Array.from(variants).filter(Boolean);
+    };
+
+    const parseSearchPage = (raw: any): { candidates: any[]; nextCursor: string | null } => {
+      const page = raw?.payload ?? raw;
+      const candidates: any[] =
+        page?.ItemResponse ??
+        page?.itemResponse ??
+        page?.items ??
+        page?.elements ??
+        page?.list?.elements?.item ??
+        [];
+      let nextCursor: string | null =
+        page?.nextCursor ?? page?.meta?.nextCursor ?? page?.list?.meta?.nextCursor ?? null;
+      if (nextCursor === "*" || nextCursor === "") nextCursor = null;
+      return { candidates, nextCursor };
+    };
+
+    const candidateNdSkus = (rows: any[] | undefined): string[] => {
+      const out = new Set<string>();
+      for (const r of rows ?? []) {
+        const sku = String(r?.sku ?? r?.SKU ?? r?.mart_sku ?? "").trim();
+        if (!sku || /ND$/i.test(sku)) continue;
+        const replaced = sku.match(/^(.*\d)[A-Z]+$/i)?.[1];
+        if (replaced) out.add(`${replaced}ND`);
+        else if (/\d$/i.test(sku)) out.add(`${sku}ND`);
+      }
+      return Array.from(out);
+    };
+
     // 1) Check the cache by gtin OR upc match (chunked to keep URL length sane).
     const cached: any[] = [];
     const CACHE_CHUNK = 200;
@@ -1847,23 +1896,69 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     }
 
     const cachedByToken = new Map<string, any[]>();
+    const pushCachedForToken = (token: string, row: any) => {
+      const arr = cachedByToken.get(token) ?? [];
+      if (!arr.some((existing) => existing.sku === row.sku)) arr.push(row);
+      cachedByToken.set(token, arr);
+    };
     for (const r of (cached ?? []) as any[]) {
       const g = (r.gtin ?? "").replace(/[^0-9]/g, "");
       const u = (r.upc ?? "").replace(/[^0-9]/g, "");
       if (g && tokens.includes(g)) {
-        const arr = cachedByToken.get(g) ?? [];
-        arr.push(r);
-        cachedByToken.set(g, arr);
+        pushCachedForToken(g, r);
       }
       if (u && u !== g && tokens.includes(u)) {
-        const arr = cachedByToken.get(u) ?? [];
-        arr.push(r);
-        cachedByToken.set(u, arr);
+        pushCachedForToken(u, r);
       }
     }
 
-    // 2) For tokens with no cache hit, query Walmart by gtin then upc.
-    const missing = tokens.filter((t) => !cachedByToken.has(t));
+    // If the pasted GTIN/UPC belongs to a non-ND listing, also attach the cached
+    // Open Box ND sibling with the same title. Some Seller Catalog variants have
+    // different GTINs for Pre-Owned vs Open Box, so identifier equality alone
+    // misses the convertible ND SKU the operator actually needs.
+    const siblingRowsByTitle = new Map<string, any[]>();
+    const nonNdCached = Array.from(cachedByToken.values())
+      .flat()
+      .filter((r) => r?.sku && !/ND$/i.test(String(r.sku)) && r.product_name);
+    for (const r of nonNdCached) {
+      const key = normalizeProductNameForSibling(String(r.product_name ?? ""));
+      if (!key || siblingRowsByTitle.has(key)) continue;
+      const words = key.split(/\s+/).filter((w) => w.length >= 4).slice(0, 4);
+      if (words.length === 0) continue;
+      let query = supabaseAdmin
+        .from("catalog_items")
+        .select(
+          "sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at"
+        )
+        .ilike("sku", "%ND")
+        .ilike("condition", "%Open Box%")
+        .limit(25);
+      for (const word of words) query = query.ilike("product_name", `%${word}%`);
+      const { data: siblingRows, error: siblingErr } = await query;
+      if (siblingErr) {
+        console.warn(`[WFS:resolve] sibling lookup failed: ${siblingErr.message}`);
+        siblingRowsByTitle.set(key, []);
+        continue;
+      }
+      siblingRowsByTitle.set(
+        key,
+        (siblingRows ?? []).filter(
+          (row: any) => normalizeProductNameForSibling(String(row.product_name ?? "")) === key
+        )
+      );
+    }
+    for (const [token, rows] of cachedByToken.entries()) {
+      for (const row of [...rows]) {
+        const key = normalizeProductNameForSibling(String(row.product_name ?? ""));
+        for (const sibling of siblingRowsByTitle.get(key) ?? []) pushCachedForToken(token, sibling);
+      }
+    }
+
+    // 2) Query Walmart when the cache does not already contain an ND SKU.
+    // A token can have a cached non-ND seller SKU while the Open Box ND sibling
+    // exists in Walmart under the GTIN-14 or UPC-12 variant, so exact cache hits
+    // are not enough to stop the direct Walmart lookup.
+    const missing = tokens.filter((t) => !hasNdSku(cachedByToken.get(t)));
     const fetchedRows: any[] = [];
     const notFound: string[] = [];
     // Kick off the (expensive) Item Report v6 + WFS SKU set downloads in parallel
@@ -1913,21 +2008,29 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
           const token = missing[idx];
           let list: any[] = [];
           let throttled = false;
+          const variants = identifierVariants(token);
           for (const kind of ["gtin", "upc"] as const) {
+            for (const searchValue of variants) {
             let attempt = 0;
             while (attempt <= MAX_429_RETRIES) {
               try {
-                const raw = await walmartApi.searchItemsByIdentifier(kind, token);
-                const page = (raw as any)?.payload ?? raw;
-                const candidates: any[] =
-                  page?.ItemResponse ??
-                  page?.itemResponse ??
-                  page?.items ??
-                  page?.elements ??
-                  page?.list?.elements?.item ??
-                  [];
-                if (candidates.length > 0) list = candidates;
-                break; // success (with or without candidates) — try next kind
+                let nextCursor: string | null = null;
+                let pages = 0;
+                do {
+                  const raw = await walmartApi.searchItemsByIdentifier(kind, searchValue, nextCursor ?? undefined);
+                  const page = parseSearchPage(raw);
+                  for (const candidate of page.candidates) {
+                    const sku = String(candidate?.sku ?? candidate?.SKU ?? candidate?.mart_sku ?? "");
+                    if (sku && !list.some((existing) => String(existing?.sku ?? existing?.SKU ?? existing?.mart_sku ?? "") === sku)) {
+                      list.push(candidate);
+                    }
+                  }
+                  nextCursor = page.nextCursor;
+                  pages++;
+                  // The endpoint returns up to 200 now; five pages is already far
+                  // beyond the variants expected for one GTIN and prevents runaway loops.
+                } while (nextCursor && pages < 5);
+                break; // success (with or without candidates) — try next variant/kind
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) break;
@@ -1945,11 +2048,37 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
                 break;
               }
             }
-            if (list.length > 0 || throttled) break;
+            if (throttled || hasNdSku(list)) break;
+            }
+            if (throttled || hasNdSku(list)) break;
           }
           if (throttled) {
             rateLimited.push(token);
             continue;
+          }
+          if (!hasNdSku(list)) {
+            const probes = candidateNdSkus([...(cachedByToken.get(token) ?? []), ...list]);
+            for (const sku of probes) {
+              try {
+                const raw = await walmartApi.getItem(sku);
+                const payload = (raw as any)?.payload ?? raw;
+                const candidate =
+                  (Array.isArray(payload?.ItemResponse) ? payload.ItemResponse[0] : payload?.ItemResponse) ??
+                  (Array.isArray(payload?.itemResponse) ? payload.itemResponse[0] : payload?.itemResponse) ??
+                  (Array.isArray(payload?.items) ? payload.items[0] : payload?.items) ??
+                  payload;
+                const foundSku = String(candidate?.sku ?? candidate?.SKU ?? candidate?.mart_sku ?? "");
+                if (/ND$/i.test(foundSku) && !list.some((existing) => String(existing?.sku ?? existing?.SKU ?? existing?.mart_sku ?? "") === foundSku)) {
+                  list.push(candidate);
+                  break;
+                }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (!msg.includes("[404]") && !msg.includes("CONTENT_NOT_FOUND")) {
+                  console.warn(`[WFS:resolve] ND sibling probe failed sku=${sku}: ${msg}`);
+                }
+              }
+            }
           }
           if (list.length === 0) {
             notFound.push(token);

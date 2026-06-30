@@ -310,17 +310,10 @@ export function ConvertByGtin({ items }: Props) {
         if (!hits || hits.length === 0) return false;
         return hits.some((it) => /ND$/i.test(it.sku));
       };
-      const unknown = tokens.filter(
-        (t) => !hasEligibleCached(t) && !knownNotFound.has(t)
-      );
-      const skipped = tokens.filter((t) => knownNotFound.has(t)).length;
+      const unknown = tokens.filter((t) => !hasEligibleCached(t));
       if (unknown.length === 0) {
         setResolveSummary({ fetched: 0, notFound: [] });
-        toast.success(
-          skipped > 0
-            ? `Nothing new to look up (${skipped.toLocaleString()} already confirmed not in Walmart).`
-            : "All GTINs already in cached catalog."
-        );
+        toast.success("All GTINs already have an ND SKU in the cached catalog.");
         return;
       }
 
