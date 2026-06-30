@@ -101,6 +101,10 @@ export function ConvertByGtin({ items }: Props) {
           alreadyConverted.push(it.sku);
           continue;
         }
+        if (!/ND$/i.test(it.sku)) {
+          ineligible.push({ token: t, item: it, reason: `sku=${it.sku} (not ND suffix)` });
+          continue;
+        }
         const condRaw = (it.condition ?? "").trim();
         const cond = condRaw.toLowerCase().replace(/[\s_-]/g, "");
         if (cond && cond !== "openbox") {
