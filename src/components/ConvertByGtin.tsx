@@ -171,9 +171,11 @@ export function ConvertByGtin({ items }: Props) {
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
-        Paste GTINs or UPCs (one per line, or comma/space separated). Same eligibility rules as Bulk
-        Convert: only <strong>Seller Fulfilled</strong> items with condition <strong>Open Box</strong> are
-        submitted. Make sure the matching SKUs have already been enriched and have dimensions imported.
+        Paste GTINs or UPCs (one per line, or comma/space separated). Items with condition{" "}
+        <strong>Open Box</strong> are eligible regardless of fulfillment, lifecycle, or published
+        status — Unpublished, Archived, and Retired SKUs are looked up directly against Walmart.
+        Click <strong>Look up GTINs</strong> first to pull any identifiers not in the cached catalog,
+        then submit.
       </div>
 
       <Textarea
@@ -203,13 +205,32 @@ export function ConvertByGtin({ items }: Props) {
             {resolution.alreadyConverted.length.toLocaleString()} already converted
           </span>
         )}
+        {resolveSummary && (
+          <span className="text-muted-foreground">
+            · pulled {resolveSummary.fetched.toLocaleString()} from Walmart
+            {resolveSummary.notFound.length > 0
+              ? ` · ${resolveSummary.notFound.length} not in Walmart`
+              : ""}
+          </span>
+        )}
         <div className="flex-1" />
         <button
-          onClick={() => setPasted("")}
+          onClick={() => {
+            setPasted("");
+            setResolveSummary(null);
+          }}
           disabled={!pasted}
           className="rounded border border-border bg-secondary px-2 py-1 hover:bg-secondary/70 disabled:opacity-50"
         >
           Clear
+        </button>
+        <button
+          onClick={() => void runLookup()}
+          disabled={resolving || tokens.length === 0}
+          className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          title="Query Walmart for any pasted GTIN/UPC not already in the cached catalog (covers Unpublished, Archived, Retired)"
+        >
+          {resolving ? "Looking up…" : `Look up GTINs (${tokens.length.toLocaleString()})`}
         </button>
         <button
           onClick={() => void runConvert()}
@@ -221,6 +242,7 @@ export function ConvertByGtin({ items }: Props) {
             : `Convert ${resolution.matched.length.toLocaleString()} to WFS`}
         </button>
       </div>
+
 
       {(resolution.unmatched.length > 0 || resolution.ineligible.length > 0) && (
         <div className="grid gap-3 sm:grid-cols-2">
