@@ -3816,7 +3816,12 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const rowList = (rows ?? []) as any[];
     const skus = rowList.map((r: any) => r.sku);
 
-    const reportMap = await reportMapPromise;
+    let reportMap = new Map<string, any>();
+    try {
+      reportMap = await reportMapPromise;
+    } catch (e) {
+      console.warn("[WFS:enrich] item report fetch failed, continuing without it:", e instanceof Error ? e.message : String(e));
+    }
 
     let enriched = 0;
     let partial = 0;
