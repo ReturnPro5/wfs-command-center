@@ -167,6 +167,18 @@ export function ConvertByGtin({ items }: Props) {
               return next;
             });
           }
+          if (res.matchedByToken && Object.keys(res.matchedByToken).length > 0) {
+            setTokenToSkus((prev) => {
+              const next = new Map(prev);
+              for (const [tok, skus] of Object.entries(res.matchedByToken)) {
+                const set = next.get(tok) ?? new Set<string>();
+                for (const s of skus) set.add(s);
+                next.set(tok, set);
+              }
+              return next;
+            });
+          }
+
           fetchedTotal += res.fetched;
           resolvedCount += res.resolved.length;
           notFoundAll.push(...res.notFound);
