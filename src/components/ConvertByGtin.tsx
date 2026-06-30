@@ -31,6 +31,7 @@ export function ConvertByGtin({ items }: Props) {
   const [pasted, setPasted] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; resolved: number; notFound: number } | null>(null);
   const [result, setResult] = useState<WfsConversionRunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [convertedSkus, setConvertedSkus] = useState<Set<string>>(new Set());
@@ -102,27 +103,47 @@ export function ConvertByGtin({ items }: Props) {
     if (tokens.length === 0) return;
     setResolving(true);
     setError(null);
+    setProgress(null);
     try {
-      // Only ask the server for tokens we don't already have a match for in
-      // the local catalog/extras cache — saves Walmart API quota.
       const unknown = tokens.filter((t) => !idMap.has(t));
       if (unknown.length === 0) {
         setResolveSummary({ fetched: 0, notFound: [] });
         toast.success("All GTINs already in cached catalog.");
         return;
       }
-      const res = await resolveIdentifiers({ data: { identifiers: unknown } });
-      if (res.resolved.length > 0) {
-        setExtraItems((prev) => {
-          const next = new Map(prev);
-          for (const it of res.resolved) next.set(it.sku, it);
-          return next;
+
+      const CHUNK = 200;
+      const total = unknown.length;
+      let fetchedTotal = 0;
+      const notFoundAll: string[] = [];
+      let resolvedCount = 0;
+      setProgress({ done: 0, total, resolved: 0, notFound: 0 });
+
+      for (let i = 0; i < total; i += CHUNK) {
+        const batch = unknown.slice(i, i + CHUNK);
+        const res = await resolveIdentifiers({ data: { identifiers: batch } });
+        if (res.resolved.length > 0) {
+          setExtraItems((prev) => {
+            const next = new Map(prev);
+            for (const it of res.resolved) next.set(it.sku, it);
+            return next;
+          });
+        }
+        fetchedTotal += res.fetched;
+        resolvedCount += res.resolved.length;
+        notFoundAll.push(...res.notFound);
+        setProgress({
+          done: Math.min(i + batch.length, total),
+          total,
+          resolved: resolvedCount,
+          notFound: notFoundAll.length,
         });
       }
-      setResolveSummary({ fetched: res.fetched, notFound: res.notFound });
+
+      setResolveSummary({ fetched: fetchedTotal, notFound: notFoundAll });
       toast.success(
-        `Found ${res.resolved.length.toLocaleString()} SKU(s) (newly pulled: ${res.fetched})${
-          res.notFound.length > 0 ? ` · ${res.notFound.length} not in Walmart` : ""
+        `Found ${resolvedCount.toLocaleString()} SKU(s) (newly pulled: ${fetchedTotal})${
+          notFoundAll.length > 0 ? ` · ${notFoundAll.length} not in Walmart` : ""
         }`
       );
     } catch (err) {
@@ -242,6 +263,27 @@ export function ConvertByGtin({ items }: Props) {
             : `Convert ${resolution.matched.length.toLocaleString()} to WFS`}
         </button>
       </div>
+
+      {progress && (
+        <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-2">
+          <div className="flex items-center justify-between font-medium">
+            <span>
+              {resolving ? "Looking up GTINs…" : "Lookup complete"} · {progress.done.toLocaleString()} / {progress.total.toLocaleString()}
+            </span>
+            <span className="text-muted-foreground">
+              {progress.resolved.toLocaleString()} found · {progress.notFound.toLocaleString()} not found
+            </span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+
 
 
       {(resolution.unmatched.length > 0 || resolution.ineligible.length > 0) && (
