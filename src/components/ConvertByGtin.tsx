@@ -457,6 +457,119 @@ export function ConvertByGtin({ items }: Props) {
     toast.success(`Exported ${rows.length.toLocaleString()} UPCs to CSV.`);
   }
 
+  async function onDimensionsFile(file: File) {
+    setImporting(true);
+    setImportResult(null);
+    setImportProgress(null);
+    try {
+      const text = await file.text();
+      const { rows: parsed, errors } = parseDimensionsCsv(text);
+      if (errors.length > 0) throw new Error(errors.join("; "));
+      if (parsed.length === 0) throw new Error("no data rows found");
+
+      // UPC -> SKU(s) lookup from cached catalog + any extras fetched ad-hoc.
+      const upcToSkus = new Map<string, string[]>();
+      const addUpc = (it: CatalogIdentifier) => {
+        const u = (it.upc ?? "").replace(/[^0-9]/g, "");
+        if (!u) return;
+        const arr = upcToSkus.get(u) ?? [];
+        if (!arr.includes(it.sku)) arr.push(it.sku);
+        upcToSkus.set(u, arr);
+      };
+      for (const it of items) addUpc(it);
+      for (const it of extraItems.values()) addUpc(it);
+
+      type ResolvedRow = {
+        sku: string;
+        length: number | null;
+        width: number | null;
+        height: number | null;
+        weight: number | null;
+        countryOfOrigin?: string;
+        brand?: string;
+        manufacturer?: string;
+        mainImageUrl?: string;
+        productType?: string;
+        price?: number | null;
+      };
+      const rowFor = (sku: string, r: ParsedDimRow): ResolvedRow => ({
+        sku,
+        length: r.length,
+        width: r.width,
+        height: r.height,
+        weight: r.weight,
+        countryOfOrigin: r.countryOfOrigin,
+        brand: r.brand,
+        manufacturer: r.manufacturer,
+        mainImageUrl: r.mainImageUrl,
+        productType: r.productType,
+        price: r.price,
+      });
+      const resolved: ResolvedRow[] = [];
+      let unresolved = 0;
+      for (const r of parsed) {
+        if (r.sku) {
+          resolved.push(rowFor(r.sku, r));
+          continue;
+        }
+        const u = (r.upc ?? "").replace(/[^0-9]/g, "");
+        const skus = upcToSkus.get(u);
+        if (!skus || skus.length === 0) {
+          unresolved++;
+          continue;
+        }
+        for (const sku of skus) resolved.push(rowFor(sku, r));
+      }
+      if (resolved.length === 0) {
+        throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
+      }
+
+      const BATCH = 500;
+      const CLIENT_CONCURRENCY = 4;
+      const chunks: ResolvedRow[][] = [];
+      for (let i = 0; i < resolved.length; i += BATCH) chunks.push(resolved.slice(i, i + BATCH));
+      let updated = 0;
+      let skipped = 0;
+      const allErrors: Array<{ sku: string; reason: string }> = [];
+      let done = 0;
+      setImportProgress({ done: 0, total: resolved.length });
+      let cursor = 0;
+      await Promise.all(
+        Array.from({ length: CLIENT_CONCURRENCY }, async () => {
+          while (cursor < chunks.length) {
+            const idx = cursor++;
+            const chunk = chunks[idx];
+            const res = await importDimensions({ data: { rows: chunk } });
+            updated += res.updated;
+            skipped += res.skipped;
+            allErrors.push(...res.errors);
+            done += chunk.length;
+            setImportProgress({ done, total: resolved.length });
+          }
+        })
+      );
+      const finalRes: ImportDimensionsResult = {
+        received: resolved.length,
+        updated,
+        skipped,
+        errors: allErrors,
+      };
+      setImportResult(finalRes);
+      toast.success(
+        `Updated ${updated.toLocaleString()} SKUs · skipped ${skipped.toLocaleString()} · ${allErrors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Import failed: ${msg}`);
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+      if (dimFileRef.current) dimFileRef.current.value = "";
+    }
+  }
+
+
+
   async function runConvert() {
     setSubmitting(true);
     setError(null);
