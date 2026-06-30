@@ -1834,6 +1834,13 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     const hasNdSku = (rows: any[] | undefined) =>
       (rows ?? []).some((r) => /ND$/i.test(String(r?.sku ?? r?.SKU ?? r?.mart_sku ?? "")));
 
+    const normalizeProductNameForSibling = (name: string): string =>
+      name
+        .toLowerCase()
+        .replace(/^(open box|pre-owned|pre owned|used|refurbished|new)\s+/i, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+
     const identifierVariants = (token: string): string[] => {
       const variants = new Set<string>([token]);
       const trimmed = token.replace(/^0+/, "");
@@ -1888,18 +1895,61 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     }
 
     const cachedByToken = new Map<string, any[]>();
+    const pushCachedForToken = (token: string, row: any) => {
+      const arr = cachedByToken.get(token) ?? [];
+      if (!arr.some((existing) => existing.sku === row.sku)) arr.push(row);
+      cachedByToken.set(token, arr);
+    };
     for (const r of (cached ?? []) as any[]) {
       const g = (r.gtin ?? "").replace(/[^0-9]/g, "");
       const u = (r.upc ?? "").replace(/[^0-9]/g, "");
       if (g && tokens.includes(g)) {
-        const arr = cachedByToken.get(g) ?? [];
-        arr.push(r);
-        cachedByToken.set(g, arr);
+        pushCachedForToken(g, r);
       }
       if (u && u !== g && tokens.includes(u)) {
-        const arr = cachedByToken.get(u) ?? [];
-        arr.push(r);
-        cachedByToken.set(u, arr);
+        pushCachedForToken(u, r);
+      }
+    }
+
+    // If the pasted GTIN/UPC belongs to a non-ND listing, also attach the cached
+    // Open Box ND sibling with the same title. Some Seller Catalog variants have
+    // different GTINs for Pre-Owned vs Open Box, so identifier equality alone
+    // misses the convertible ND SKU the operator actually needs.
+    const siblingRowsByTitle = new Map<string, any[]>();
+    const nonNdCached = Array.from(cachedByToken.values())
+      .flat()
+      .filter((r) => r?.sku && !/ND$/i.test(String(r.sku)) && r.product_name);
+    for (const r of nonNdCached) {
+      const key = normalizeProductNameForSibling(String(r.product_name ?? ""));
+      if (!key || siblingRowsByTitle.has(key)) continue;
+      const words = key.split(/\s+/).filter((w) => w.length >= 4).slice(0, 4);
+      if (words.length === 0) continue;
+      let query = supabaseAdmin
+        .from("catalog_items")
+        .select(
+          "sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at"
+        )
+        .ilike("sku", "%ND")
+        .ilike("condition", "%Open Box%")
+        .limit(25);
+      for (const word of words) query = query.ilike("product_name", `%${word}%`);
+      const { data: siblingRows, error: siblingErr } = await query;
+      if (siblingErr) {
+        console.warn(`[WFS:resolve] sibling lookup failed: ${siblingErr.message}`);
+        siblingRowsByTitle.set(key, []);
+        continue;
+      }
+      siblingRowsByTitle.set(
+        key,
+        (siblingRows ?? []).filter(
+          (row: any) => normalizeProductNameForSibling(String(row.product_name ?? "")) === key
+        )
+      );
+    }
+    for (const [token, rows] of cachedByToken.entries()) {
+      for (const row of [...rows]) {
+        const key = normalizeProductNameForSibling(String(row.product_name ?? ""));
+        for (const sibling of siblingRowsByTitle.get(key) ?? []) pushCachedForToken(token, sibling);
       }
     }
 
