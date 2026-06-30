@@ -1948,7 +1948,10 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
             gtin,
             upc,
             lifecycle: String(it.lifecycleStatus ?? it.lifecycle ?? "").toUpperCase() || "ACTIVE",
-            condition: String(it.condition ?? it.itemCondition ?? "New"),
+            // Walmart's /v3/items search rarely returns a reliable condition. Leave
+            // it blank when missing so the Convert-by-GTIN path can treat it as
+            // "unknown — trust the operator" instead of defaulting to "New".
+            condition: String(it.condition ?? it.itemCondition ?? ""),
             published_status: String(it.publishedStatus ?? it.published_status ?? ""),
             fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
             category: String(it.productType ?? it.category ?? report?.productType ?? ""),
@@ -2956,9 +2959,11 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       }
       // Bulk Convert only handles Open Box items — any other condition is
       // rejected before we build the payload so we never trigger Walmart's
-      // "condition differs from Seller Catalog" error.
+      // "condition differs from Seller Catalog" error. Blank/unknown is
+      // allowed (search-API resolved SKUs don't expose condition) and the
+      // payload hardcodes "Open Box"; Walmart will reject any mismatch.
       const condNorm = String(r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
-      if (condNorm !== "openbox") {
+      if (condNorm && condNorm !== "openbox") {
         preflightFailed.push({
           sku,
           status: "INELIGIBLE_CONDITION",
