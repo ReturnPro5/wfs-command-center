@@ -6,6 +6,7 @@ import { CategoryFilter } from "@/components/CategoryFilter";
 import { ErrorState, EmptyState } from "@/components/StateDisplays";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BulkConvertWfs } from "@/components/BulkConvertWfs";
+import { ConvertByGtin } from "@/components/ConvertByGtin";
 import {
   getCachedCatalog,
   syncCatalogStep,
