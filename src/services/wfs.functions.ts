@@ -3924,7 +3924,7 @@ export interface EnrichCatalogResult {
   remaining: number;
   done: boolean;
   nextAfterSku: string | null;
-  details?: Array<{ sku: string; status: EnrichmentStatus; missing: string[]; error?: string }>;
+  details?: Array<{ sku: string; status: string; missing: string[]; error?: string }>;
 }
 
 export const enrichCatalogStep = createServerFn({ method: "POST" })
@@ -3978,7 +3978,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     let enriched = 0;
     let partial = 0;
     let failed = 0;
-    const details: Array<{ sku: string; status: EnrichmentStatus; missing: string[]; error?: string }> = [];
+    const details: Array<{ sku: string; status: string; missing: string[]; error?: string }> = [];
     const now = new Date().toISOString();
 
     const CONCURRENCY = 16;
