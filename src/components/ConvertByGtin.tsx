@@ -40,6 +40,10 @@ export function ConvertByGtin({ items }: Props) {
   const [extraItems, setExtraItems] = useState<Map<string, CatalogIdentifier>>(new Map());
   // Tokens we already confirmed are not in Walmart this session — skip on re-lookup.
   const [knownNotFound, setKnownNotFound] = useState<Set<string>>(new Set());
+  // token (as pasted, digits-only) → set of SKUs resolved by the server. Used
+  // alongside idMap because Walmart's /v3/items search results often omit
+  // gtin/upc on the returned item, so we can't always re-index by identifier.
+  const [tokenToSkus, setTokenToSkus] = useState<Map<string, Set<string>>>(new Map());
   const [resolveSummary, setResolveSummary] = useState<{
     fetched: number;
     notFound: string[];
@@ -65,6 +69,7 @@ export function ConvertByGtin({ items }: Props) {
     return m;
   }, [items, extraItems]);
 
+
   const tokens = useMemo(() => parsePasted(pasted), [pasted]);
 
   const resolution = useMemo(() => {
@@ -73,8 +78,18 @@ export function ConvertByGtin({ items }: Props) {
     const ineligible: Array<{ token: string; item: CatalogIdentifier; reason: string }> = [];
     const alreadyConverted: string[] = [];
     const seenSkus = new Set<string>();
+    // Quick lookup by SKU across all known items (cached + extras).
+    const bySku = new Map<string, CatalogIdentifier>();
+    for (const it of items) bySku.set(it.sku, it);
+    for (const it of extraItems.values()) bySku.set(it.sku, it);
+
     for (const t of tokens) {
-      const hits = idMap.get(t);
+      // Prefer the server-reported token→SKU mapping (works even when the
+      // returned item carries no gtin/upc). Fall back to idMap.
+      const skuSet = tokenToSkus.get(t);
+      const hits: CatalogIdentifier[] = skuSet
+        ? Array.from(skuSet).map((s) => bySku.get(s)).filter(Boolean) as CatalogIdentifier[]
+        : (idMap.get(t) ?? []);
       if (!hits || hits.length === 0) {
         unmatched.push(t);
         continue;
@@ -86,15 +101,6 @@ export function ConvertByGtin({ items }: Props) {
           alreadyConverted.push(it.sku);
           continue;
         }
-        // Convert-by-GTIN intentionally accepts items regardless of
-        // fulfillment / lifecycle / published status — the operator pasted
-        // the GTIN explicitly. Only the Open Box condition gate (enforced
-        // server-side too) blocks here.
-        // Convert-by-GTIN intentionally accepts items regardless of
-        // fulfillment / lifecycle / published status — the operator pasted
-        // the GTIN explicitly. Condition gate: allow Open Box OR unknown
-        // (Walmart's search API doesn't return condition for most items,
-        // so we trust the operator and let the feed validate).
         const condRaw = (it.condition ?? "").trim();
         const cond = condRaw.toLowerCase().replace(/[\s_-]/g, "");
         if (cond && cond !== "openbox") {
@@ -105,7 +111,8 @@ export function ConvertByGtin({ items }: Props) {
       }
     }
     return { matched, unmatched, ineligible, alreadyConverted };
-  }, [tokens, idMap, convertedSkus]);
+  }, [tokens, idMap, convertedSkus, tokenToSkus, items, extraItems]);
+
 
   async function runLookup() {
     if (tokens.length === 0) return;
@@ -160,6 +167,18 @@ export function ConvertByGtin({ items }: Props) {
               return next;
             });
           }
+          if (res.matchedByToken && Object.keys(res.matchedByToken).length > 0) {
+            setTokenToSkus((prev) => {
+              const next = new Map(prev);
+              for (const [tok, skus] of Object.entries(res.matchedByToken)) {
+                const set = next.get(tok) ?? new Set<string>();
+                for (const s of skus) set.add(s);
+                next.set(tok, set);
+              }
+              return next;
+            });
+          }
+
           fetchedTotal += res.fetched;
           resolvedCount += res.resolved.length;
           notFoundAll.push(...res.notFound);
