@@ -357,7 +357,22 @@ export function ConvertByGtin({ items }: Props) {
         </div>
       )}
 
-
+      {resolution.matched.length > 0 && (
+        <details open className="rounded-md border border-border bg-secondary/20 p-3 text-xs">
+          <summary className="cursor-pointer font-medium text-status-healthy">
+            Eligible ({resolution.matched.length})
+          </summary>
+          <ul className="mt-2 max-h-60 overflow-y-auto space-y-0.5 font-mono">
+            {resolution.matched.slice(0, 500).map((r) => (
+              <li key={r.item.sku}>
+                <span className="text-primary">{r.token}</span>{" "}
+                <span className="text-muted-foreground">→ {r.item.sku}</span>{" "}
+                <span className="text-status-healthy">[{r.item.condition || "Open Box"}]</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
 
       {(resolution.unmatched.length > 0 || resolution.ineligible.length > 0) && (
