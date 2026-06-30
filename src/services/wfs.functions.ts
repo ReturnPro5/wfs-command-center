@@ -1948,7 +1948,10 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
             gtin,
             upc,
             lifecycle: String(it.lifecycleStatus ?? it.lifecycle ?? "").toUpperCase() || "ACTIVE",
-            condition: String(it.condition ?? it.itemCondition ?? "New"),
+            // Walmart's /v3/items search rarely returns a reliable condition. Leave
+            // it blank when missing so the Convert-by-GTIN path can treat it as
+            // "unknown — trust the operator" instead of defaulting to "New".
+            condition: String(it.condition ?? it.itemCondition ?? ""),
             published_status: String(it.publishedStatus ?? it.published_status ?? ""),
             fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
             category: String(it.productType ?? it.category ?? report?.productType ?? ""),
