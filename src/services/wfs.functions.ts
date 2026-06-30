@@ -1886,35 +1886,59 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
       // Also ensure the access token is acquired before the parallel search workers spin up.
       await getWalmartAccessToken();
     }
-    const CONCURRENCY = 12;
+    // Walmart's /v3/items endpoint throttles aggressively. Keep concurrency
+    // low and retry 429s with exponential backoff so we don't silently
+    // classify rate-limited tokens as "not found".
+    const CONCURRENCY = 3;
+    const MAX_429_RETRIES = 4;
     let cursor = 0;
     const hits: Array<{ token: string; list: any[] }> = [];
+    const rateLimited: string[] = [];
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     await Promise.all(
       Array.from({ length: Math.min(CONCURRENCY, missing.length) }, async () => {
         while (cursor < missing.length) {
           const idx = cursor++;
           const token = missing[idx];
           let list: any[] = [];
+          let throttled = false;
           for (const kind of ["gtin", "upc"] as const) {
-            try {
-              const raw = await walmartApi.searchItemsByIdentifier(kind, token);
-              const page = (raw as any)?.payload ?? raw;
-              const candidates: any[] =
-                page?.ItemResponse ??
-                page?.itemResponse ??
-                page?.items ??
-                page?.elements ??
-                page?.list?.elements?.item ??
-                [];
-              if (candidates.length > 0) {
-                list = candidates;
+            let attempt = 0;
+            while (attempt <= MAX_429_RETRIES) {
+              try {
+                const raw = await walmartApi.searchItemsByIdentifier(kind, token);
+                const page = (raw as any)?.payload ?? raw;
+                const candidates: any[] =
+                  page?.ItemResponse ??
+                  page?.itemResponse ??
+                  page?.items ??
+                  page?.elements ??
+                  page?.list?.elements?.item ??
+                  [];
+                if (candidates.length > 0) list = candidates;
+                break; // success (with or without candidates) — try next kind
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) break;
+                if (msg.includes("[429]") || msg.includes("REQUEST_THRESHOLD_VIOLATED")) {
+                  attempt++;
+                  if (attempt > MAX_429_RETRIES) {
+                    throttled = true;
+                    break;
+                  }
+                  // 1s, 2s, 4s, 8s + jitter
+                  await sleep(1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250));
+                  continue;
+                }
+                console.warn(`[WFS:resolve] ${kind}=${token} failed: ${msg}`);
                 break;
               }
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) continue;
-              console.warn(`[WFS:resolve] ${kind}=${token} failed: ${msg}`);
             }
+            if (list.length > 0 || throttled) break;
+          }
+          if (throttled) {
+            rateLimited.push(token);
+            continue;
           }
           if (list.length === 0) {
             notFound.push(token);
