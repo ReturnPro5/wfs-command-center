@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  resolveIdentifiers,
   submitWfsConversion,
   type CatalogIdentifier,
   type WfsConversionRunResult,
@@ -29,29 +30,37 @@ function parsePasted(text: string): string[] {
 export function ConvertByGtin({ items }: Props) {
   const [pasted, setPasted] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const [result, setResult] = useState<WfsConversionRunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [convertedSkus, setConvertedSkus] = useState<Set<string>>(new Set());
+  // SKUs pulled from Walmart on demand for tokens that weren't in the cache
+  // (Unpublished / Retired / Archived items not covered by the normal sync).
+  const [extraItems, setExtraItems] = useState<Map<string, CatalogIdentifier>>(new Map());
+  const [resolveSummary, setResolveSummary] = useState<{
+    fetched: number;
+    notFound: string[];
+  } | null>(null);
 
-  // Build GTIN/UPC -> SKU(s) map once.
+  // Build GTIN/UPC -> SKU(s) map across the cached catalog AND any extras we
+  // fetched ad-hoc for this paste.
   const idMap = useMemo(() => {
     const m = new Map<string, CatalogIdentifier[]>();
-    for (const it of items) {
+    const push = (key: string, it: CatalogIdentifier) => {
+      const arr = m.get(key) ?? [];
+      if (!arr.some((x) => x.sku === it.sku)) arr.push(it);
+      m.set(key, arr);
+    };
+    const add = (it: CatalogIdentifier) => {
       const g = normalizeId(it.gtin ?? "");
       const u = normalizeId(it.upc ?? "");
-      if (g) {
-        const arr = m.get(g) ?? [];
-        arr.push(it);
-        m.set(g, arr);
-      }
-      if (u && u !== g) {
-        const arr = m.get(u) ?? [];
-        arr.push(it);
-        m.set(u, arr);
-      }
-    }
+      if (g) push(g, it);
+      if (u && u !== g) push(u, it);
+    };
+    for (const it of items) add(it);
+    for (const it of extraItems.values()) add(it);
     return m;
-  }, [items]);
+  }, [items, extraItems]);
 
   const tokens = useMemo(() => parsePasted(pasted), [pasted]);
 
@@ -74,11 +83,11 @@ export function ConvertByGtin({ items }: Props) {
           alreadyConverted.push(it.sku);
           continue;
         }
+        // Convert-by-GTIN intentionally accepts items regardless of
+        // fulfillment / lifecycle / published status — the operator pasted
+        // the GTIN explicitly. Only the Open Box condition gate (enforced
+        // server-side too) blocks here.
         const cond = (it.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
-        if ((it.fulfillment ?? "Unknown") !== "Seller Fulfilled") {
-          ineligible.push({ token: t, item: it, reason: `fulfillment=${it.fulfillment ?? "Unknown"}` });
-          continue;
-        }
         if (cond !== "openbox") {
           ineligible.push({ token: t, item: it, reason: `condition=${it.condition || "—"}` });
           continue;
@@ -88,6 +97,44 @@ export function ConvertByGtin({ items }: Props) {
     }
     return { matched, unmatched, ineligible, alreadyConverted };
   }, [tokens, idMap, convertedSkus]);
+
+  async function runLookup() {
+    if (tokens.length === 0) return;
+    setResolving(true);
+    setError(null);
+    try {
+      // Only ask the server for tokens we don't already have a match for in
+      // the local catalog/extras cache — saves Walmart API quota.
+      const unknown = tokens.filter((t) => !idMap.has(t));
+      if (unknown.length === 0) {
+        setResolveSummary({ fetched: 0, notFound: [] });
+        toast.success("All GTINs already in cached catalog.");
+        return;
+      }
+      const res = await resolveIdentifiers({ data: { identifiers: unknown } });
+      if (res.resolved.length > 0) {
+        setExtraItems((prev) => {
+          const next = new Map(prev);
+          for (const it of res.resolved) next.set(it.sku, it);
+          return next;
+        });
+      }
+      setResolveSummary({ fetched: res.fetched, notFound: res.notFound });
+      toast.success(
+        `Found ${res.resolved.length.toLocaleString()} SKU(s) (newly pulled: ${res.fetched})${
+          res.notFound.length > 0 ? ` · ${res.notFound.length} not in Walmart` : ""
+        }`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(`Lookup failed: ${msg}`);
+    } finally {
+      setResolving(false);
+    }
+  }
+
+
 
   async function runConvert() {
     setSubmitting(true);
