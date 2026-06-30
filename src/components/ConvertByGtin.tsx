@@ -1,17 +1,20 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   enrichCatalogStep,
+  importDimensions,
   resolveIdentifiers,
   submitWfsConversion,
   type CatalogIdentifier,
+  type ImportDimensionsResult,
   type WfsConversionRunResult,
 } from "@/services/wfs.functions";
 
 interface Props {
   items: CatalogIdentifier[];
 }
+
 
 function normalizeId(s: string): string {
   return s.replace(/[^0-9]/g, "");
