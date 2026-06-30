@@ -103,27 +103,47 @@ export function ConvertByGtin({ items }: Props) {
     if (tokens.length === 0) return;
     setResolving(true);
     setError(null);
+    setProgress(null);
     try {
-      // Only ask the server for tokens we don't already have a match for in
-      // the local catalog/extras cache — saves Walmart API quota.
       const unknown = tokens.filter((t) => !idMap.has(t));
       if (unknown.length === 0) {
         setResolveSummary({ fetched: 0, notFound: [] });
         toast.success("All GTINs already in cached catalog.");
         return;
       }
-      const res = await resolveIdentifiers({ data: { identifiers: unknown } });
-      if (res.resolved.length > 0) {
-        setExtraItems((prev) => {
-          const next = new Map(prev);
-          for (const it of res.resolved) next.set(it.sku, it);
-          return next;
+
+      const CHUNK = 200;
+      const total = unknown.length;
+      let fetchedTotal = 0;
+      const notFoundAll: string[] = [];
+      let resolvedCount = 0;
+      setProgress({ done: 0, total, resolved: 0, notFound: 0 });
+
+      for (let i = 0; i < total; i += CHUNK) {
+        const batch = unknown.slice(i, i + CHUNK);
+        const res = await resolveIdentifiers({ data: { identifiers: batch } });
+        if (res.resolved.length > 0) {
+          setExtraItems((prev) => {
+            const next = new Map(prev);
+            for (const it of res.resolved) next.set(it.sku, it);
+            return next;
+          });
+        }
+        fetchedTotal += res.fetched;
+        resolvedCount += res.resolved.length;
+        notFoundAll.push(...res.notFound);
+        setProgress({
+          done: Math.min(i + batch.length, total),
+          total,
+          resolved: resolvedCount,
+          notFound: notFoundAll.length,
         });
       }
-      setResolveSummary({ fetched: res.fetched, notFound: res.notFound });
+
+      setResolveSummary({ fetched: fetchedTotal, notFound: notFoundAll });
       toast.success(
-        `Found ${res.resolved.length.toLocaleString()} SKU(s) (newly pulled: ${res.fetched})${
-          res.notFound.length > 0 ? ` · ${res.notFound.length} not in Walmart` : ""
+        `Found ${resolvedCount.toLocaleString()} SKU(s) (newly pulled: ${fetchedTotal})${
+          notFoundAll.length > 0 ? ` · ${notFoundAll.length} not in Walmart` : ""
         }`
       );
     } catch (err) {
