@@ -1875,16 +1875,22 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     const ensureReports = () => {
       if (!reportPromise) {
         reportPromise = (async () => {
-          await getWalmartAccessToken();
-          const [a, b] = await Promise.all([
-            getWfsFulfilledSkuSet(),
-            getItemReportFulfillmentMap(),
-          ]);
-          return [a, b] as [Set<string>, Map<string, any>];
+          try {
+            await getWalmartAccessToken();
+            const [a, b] = await Promise.all([
+              getWfsFulfilledSkuSet().catch(() => new Set<string>()),
+              getItemReportFulfillmentMap().catch(() => new Map<string, any>()),
+            ]);
+            return [a, b] as [Set<string>, Map<string, any>];
+          } catch (err) {
+            console.warn(`[WFS:resolve] enrichment reports unavailable: ${err instanceof Error ? err.message : String(err)}`);
+            return [new Set<string>(), new Map<string, any>()] as [Set<string>, Map<string, any>];
+          }
         })();
       }
       return reportPromise;
     };
+
     if (missing.length > 0) {
       // Pre-warm token + reports in background so they're ready by the time we hit a match.
       void ensureReports();
