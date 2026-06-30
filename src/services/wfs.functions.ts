@@ -1837,6 +1837,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     const normalizeProductNameForSibling = (name: string): string =>
       name
         .toLowerCase()
+        .replace(/^pre-owned\s*:\s*(like new|very good|good|acceptable)\s+/i, "")
         .replace(/^(open box|pre-owned|pre owned|used|refurbished|new)\b[:\s-]*/i, "")
         .replace(/[^a-z0-9]+/g, " ")
         .trim();
