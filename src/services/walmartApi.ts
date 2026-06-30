@@ -212,7 +212,14 @@ export async function searchItemsByIdentifier(
   nextCursor?: string
 ) {
   const params = new URLSearchParams({ limit: "200", [kind]: value });
-  if (nextCursor) params.set("nextCursor", nextCursor);
+  if (nextCursor) {
+    let raw = nextCursor.startsWith("?") ? nextCursor.slice(1) : nextCursor;
+    if (raw.includes("=") || raw.includes("&")) {
+      const parsed = new URLSearchParams(raw);
+      raw = parsed.get("nextCursor") ?? raw;
+    }
+    params.set("nextCursor", raw);
+  }
   return walmartFetch<any>(`/v3/items?${params}`);
 }
 
