@@ -107,14 +107,20 @@ export function ConvertByGtin({ items }: Props) {
     setError(null);
     setProgress(null);
     try {
-      const unknown = tokens.filter((t) => !idMap.has(t));
+      const unknown = tokens.filter((t) => !idMap.has(t) && !knownNotFound.has(t));
+      const skipped = tokens.filter((t) => knownNotFound.has(t)).length;
       if (unknown.length === 0) {
         setResolveSummary({ fetched: 0, notFound: [] });
-        toast.success("All GTINs already in cached catalog.");
+        toast.success(
+          skipped > 0
+            ? `Nothing new to look up (${skipped.toLocaleString()} already confirmed not in Walmart).`
+            : "All GTINs already in cached catalog."
+        );
         return;
       }
 
-      const CHUNK = 200;
+      // Smaller chunks → progress moves more often, so the UI never feels stuck.
+      const CHUNK = 50;
       const total = unknown.length;
       let fetchedTotal = 0;
       const notFoundAll: string[] = [];
@@ -131,6 +137,13 @@ export function ConvertByGtin({ items }: Props) {
             return next;
           });
         }
+        if (res.notFound.length > 0) {
+          setKnownNotFound((prev) => {
+            const next = new Set(prev);
+            for (const t of res.notFound) next.add(t);
+            return next;
+          });
+        }
         fetchedTotal += res.fetched;
         resolvedCount += res.resolved.length;
         notFoundAll.push(...res.notFound);
@@ -140,6 +153,8 @@ export function ConvertByGtin({ items }: Props) {
           resolved: resolvedCount,
           notFound: notFoundAll.length,
         });
+        // Yield to the event loop so React can repaint the progress bar.
+        await new Promise((r) => setTimeout(r, 0));
       }
 
       setResolveSummary({ fetched: fetchedTotal, notFound: notFoundAll });
