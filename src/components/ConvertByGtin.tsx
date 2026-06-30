@@ -90,8 +90,14 @@ export function ConvertByGtin({ items }: Props) {
         // fulfillment / lifecycle / published status — the operator pasted
         // the GTIN explicitly. Only the Open Box condition gate (enforced
         // server-side too) blocks here.
-        const cond = (it.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
-        if (cond !== "openbox") {
+        // Convert-by-GTIN intentionally accepts items regardless of
+        // fulfillment / lifecycle / published status — the operator pasted
+        // the GTIN explicitly. Condition gate: allow Open Box OR unknown
+        // (Walmart's search API doesn't return condition for most items,
+        // so we trust the operator and let the feed validate).
+        const condRaw = (it.condition ?? "").trim();
+        const cond = condRaw.toLowerCase().replace(/[\s_-]/g, "");
+        if (cond && cond !== "openbox") {
           ineligible.push({ token: t, item: it, reason: `condition=${it.condition || "—"}` });
           continue;
         }
