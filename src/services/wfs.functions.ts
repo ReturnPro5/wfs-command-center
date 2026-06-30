@@ -1824,7 +1824,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     const tokens = Array.from(
       new Set(data.identifiers.map((t) => t.replace(/[^0-9]/g, "")).filter(Boolean))
     );
-    if (tokens.length === 0) return { resolved: [], notFound: [], fetched: 0 };
+    if (tokens.length === 0) return { resolved: [], notFound: [], rateLimited: [], fetched: 0 };
 
     // 1) Check the cache by gtin OR upc match (chunked to keep URL length sane).
     const cached: any[] = [];
