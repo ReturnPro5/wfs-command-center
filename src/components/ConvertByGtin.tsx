@@ -38,6 +38,8 @@ export function ConvertByGtin({ items }: Props) {
   // SKUs pulled from Walmart on demand for tokens that weren't in the cache
   // (Unpublished / Retired / Archived items not covered by the normal sync).
   const [extraItems, setExtraItems] = useState<Map<string, CatalogIdentifier>>(new Map());
+  // Tokens we already confirmed are not in Walmart this session — skip on re-lookup.
+  const [knownNotFound, setKnownNotFound] = useState<Set<string>>(new Set());
   const [resolveSummary, setResolveSummary] = useState<{
     fetched: number;
     notFound: string[];
