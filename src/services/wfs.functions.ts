@@ -2053,7 +2053,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
       resolved.push(toIdent(r));
     }
 
-    return { resolved, notFound, rateLimited, fetched: fetchedRows.length };
+    return { resolved, notFound, rateLimited, fetched: fetchedRows.length, matchedByToken };
   });
 
 
