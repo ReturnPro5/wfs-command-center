@@ -1857,15 +1857,21 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     }
 
     // 2) For tokens with no cache hit, query Walmart by gtin then upc.
-    await getWalmartAccessToken();
-    const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
-      getWfsFulfilledSkuSet(),
-      getItemReportFulfillmentMap(),
-    ]);
-
     const missing = tokens.filter((t) => !cachedByToken.has(t));
     const fetchedRows: any[] = [];
     const notFound: string[] = [];
+    // Skip expensive Item Report v6 + WFS SKU set fetches when nothing is missing —
+    // those downloads can take tens of seconds and were running on every 50-token batch
+    // even when all tokens were already cached or already confirmed not-found.
+    let wfsSkuSet: Set<string> = new Set();
+    let itemReportFulfillment: Map<string, any> = new Map();
+    if (missing.length > 0) {
+      await getWalmartAccessToken();
+      [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+        getWfsFulfilledSkuSet(),
+        getItemReportFulfillmentMap(),
+      ]);
+    }
     const CONCURRENCY = 12;
     let cursor = 0;
     await Promise.all(
