@@ -95,6 +95,105 @@ function exportDimensionsTemplate(rows: CatalogIdentifier[]) {
   URL.revokeObjectURL(url);
 }
 
+// ─── Dimensions CSV import (mirrors BulkConvertWfs) ───────────────────────
+function parseCsv(text: string): string[][] {
+  const out: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let i = 0;
+  let inQuotes = false;
+  const src = text.replace(/\r\n?/g, "\n");
+  while (i < src.length) {
+    const c = src[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (src[i + 1] === '"') { cell += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      cell += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ",") { row.push(cell); cell = ""; i++; continue; }
+    if (c === "\n") { row.push(cell); out.push(row); row = []; cell = ""; i++; continue; }
+    if (c === "=" && src[i + 1] === '"') { i++; continue; }
+    cell += c; i++;
+  }
+  if (cell.length > 0 || row.length > 0) { row.push(cell); out.push(row); }
+  return out.filter((r) => r.length > 1 || (r[0] && r[0].trim() !== ""));
+}
+
+interface ParsedDimRow {
+  sku?: string;
+  upc?: string;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+  weight: number | null;
+  countryOfOrigin?: string;
+  brand?: string;
+  manufacturer?: string;
+  mainImageUrl?: string;
+  productType?: string;
+  price?: number | null;
+}
+
+function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: string[] } {
+  const errors: string[] = [];
+  const grid = parseCsv(text);
+  if (grid.length === 0) return { rows: [], errors: ["empty file"] };
+  const header = grid[0].map((h) => h.trim().toLowerCase().replace(/^\ufeff/, ""));
+  const idx = (names: string[]) =>
+    header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
+  const iSku = idx(["sku"]);
+  const iUpc = idx(["upc"]);
+  const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
+  const iWid = idx(["width", "dimensionw", "dimension w"]);
+  const iHei = idx(["height", "dimensionh", "dimension h"]);
+  const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country"]);
+  const iBrand = idx(["brand"]);
+  const iMfr = idx(["manufacturer", "mfr"]);
+  const iImg = idx(["mainimageurl", "main image url", "imageurl", "image"]);
+  const iPt = idx(["producttype", "product type", "category"]);
+  const iPrice = idx(["price"]);
+  if (iSku < 0 && iUpc < 0) {
+    errors.push("missing SKU or UPC column");
+    return { rows: [], errors };
+  }
+  const num = (s: string | undefined): number | null => {
+    if (s == null) return null;
+    const t = s.replace(/[",=$']/g, "").trim();
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const clean = (s: string | undefined): string =>
+    (s ?? "").replace(/[",=]/g, "").replace(/^'/, "").trim();
+  const rows: ParsedDimRow[] = [];
+  for (let r = 1; r < grid.length; r++) {
+    const cells = grid[r];
+    const sku = iSku >= 0 ? clean(cells[iSku]) : "";
+    const upc = iUpc >= 0 ? clean(cells[iUpc]) : "";
+    if (!sku && !upc) continue;
+    rows.push({
+      sku: sku || undefined,
+      upc: upc || undefined,
+      length: iLen >= 0 ? num(cells[iLen]) : null,
+      width: iWid >= 0 ? num(cells[iWid]) : null,
+      height: iHei >= 0 ? num(cells[iHei]) : null,
+      weight: iWgt >= 0 ? num(cells[iWgt]) : null,
+      countryOfOrigin: iCoo >= 0 ? clean(cells[iCoo]) || undefined : undefined,
+      brand: iBrand >= 0 ? clean(cells[iBrand]) || undefined : undefined,
+      manufacturer: iMfr >= 0 ? clean(cells[iMfr]) || undefined : undefined,
+      mainImageUrl: iImg >= 0 ? clean(cells[iImg]) || undefined : undefined,
+      productType: iPt >= 0 ? clean(cells[iPt]) || undefined : undefined,
+      price: iPrice >= 0 ? num(cells[iPrice]) : null,
+    });
+  }
+  return { rows, errors };
+}
+
+
 export function ConvertByGtin({ items }: Props) {
   const [pasted, setPasted] = useState("");
   const [submitting, setSubmitting] = useState(false);
