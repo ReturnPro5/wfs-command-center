@@ -1860,6 +1860,18 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
       return { candidates, nextCursor };
     };
 
+    const candidateNdSkus = (rows: any[] | undefined): string[] => {
+      const out = new Set<string>();
+      for (const r of rows ?? []) {
+        const sku = String(r?.sku ?? r?.SKU ?? r?.mart_sku ?? "").trim();
+        if (!sku || /ND$/i.test(sku)) continue;
+        const replaced = sku.match(/^(.*\d)[A-Z]+$/i)?.[1];
+        if (replaced) out.add(`${replaced}ND`);
+        else if (/\d$/i.test(sku)) out.add(`${sku}ND`);
+      }
+      return Array.from(out);
+    };
+
     // 1) Check the cache by gtin OR upc match (chunked to keep URL length sane).
     const cached: any[] = [];
     const CACHE_CHUNK = 200;
@@ -1951,7 +1963,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
             let attempt = 0;
             while (attempt <= MAX_429_RETRIES) {
               try {
-                let nextCursor: string | null = "*";
+                let nextCursor: string | null = null;
                 let pages = 0;
                 do {
                   const raw = await walmartApi.searchItemsByIdentifier(kind, searchValue, nextCursor ?? undefined);
@@ -1992,6 +2004,30 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
           if (throttled) {
             rateLimited.push(token);
             continue;
+          }
+          if (!hasNdSku(list)) {
+            const probes = candidateNdSkus([...(cachedByToken.get(token) ?? []), ...list]);
+            for (const sku of probes) {
+              try {
+                const raw = await walmartApi.getItem(sku);
+                const payload = (raw as any)?.payload ?? raw;
+                const candidate =
+                  (Array.isArray(payload?.ItemResponse) ? payload.ItemResponse[0] : payload?.ItemResponse) ??
+                  (Array.isArray(payload?.itemResponse) ? payload.itemResponse[0] : payload?.itemResponse) ??
+                  (Array.isArray(payload?.items) ? payload.items[0] : payload?.items) ??
+                  payload;
+                const foundSku = String(candidate?.sku ?? candidate?.SKU ?? candidate?.mart_sku ?? "");
+                if (/ND$/i.test(foundSku) && !list.some((existing) => String(existing?.sku ?? existing?.SKU ?? existing?.mart_sku ?? "") === foundSku)) {
+                  list.push(candidate);
+                  break;
+                }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (!msg.includes("[404]") && !msg.includes("CONTENT_NOT_FOUND")) {
+                  console.warn(`[WFS:resolve] ND sibling probe failed sku=${sku}: ${msg}`);
+                }
+              }
+            }
           }
           if (list.length === 0) {
             notFound.push(token);
