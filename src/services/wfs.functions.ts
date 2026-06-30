@@ -3894,11 +3894,26 @@ function mergeEnrichedFields(next: EnrichedFields, previous: EnrichedFields): En
 }
 
 function classifyEnrichment(fields: EnrichedFields): EnrichmentStatus {
+  return missingEnrichmentFields(fields).length === 0 ? "enriched" : "partial";
+}
+
+function missingEnrichmentFields(fields: EnrichedFields): string[] {
+  const labels: Partial<Record<keyof EnrichedFields, string>> = {
+    brand: "brand",
+    main_image_url: "mainImageUrl",
+    price: "price",
+    product_type: "productType",
+    country_of_origin: "countryOfOrigin",
+    shipping_weight: "weight",
+    shipping_length: "length",
+    shipping_width: "width",
+    shipping_height: "height",
+  };
+  const missing: string[] = [];
   for (const k of REQUIRED_FOR_WFS) {
-    const v = fields[k];
-    if (v === null || v === undefined || v === "") return "partial";
+    if (!hasEnrichedValue(fields[k])) missing.push(labels[k] ?? k);
   }
-  return "enriched";
+  return missing;
 }
 
 export interface EnrichCatalogResult {
@@ -3909,6 +3924,7 @@ export interface EnrichCatalogResult {
   remaining: number;
   done: boolean;
   nextAfterSku: string | null;
+  details?: Array<{ sku: string; status: string; missing: string[]; error?: string }>;
 }
 
 export const enrichCatalogStep = createServerFn({ method: "POST" })
@@ -3962,6 +3978,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     let enriched = 0;
     let partial = 0;
     let failed = 0;
+    const details: Array<{ sku: string; status: string; missing: string[]; error?: string }> = [];
     const now = new Date().toISOString();
 
     const CONCURRENCY = 16;
@@ -3978,6 +3995,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
             existingEnrichedFields(existingRow)
           );
           const status = classifyEnrichment(fields);
+          const missing = missingEnrichmentFields(fields);
           const { error: uErr } = await supabaseAdmin
             .from("catalog_items")
             .update({
@@ -3991,14 +4009,17 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
             .eq("sku", sku);
           if (uErr) {
             failed++;
+            details.push({ sku, status: "error", missing: [], error: uErr.message });
             console.warn(`[WFS:enrich] update failed sku=${sku}: ${uErr.message}`);
             continue;
           }
           if (status === "enriched") enriched++;
           else partial++;
+          details.push({ sku, status, missing });
         } catch (e) {
           failed++;
           const msg = e instanceof Error ? e.message : String(e);
+          details.push({ sku, status: "error", missing: [], error: msg.slice(0, 500) });
           console.warn(`[WFS:enrich] fetch failed sku=${sku}:`, msg);
           await supabaseAdmin
             .from("catalog_items")
@@ -4046,6 +4067,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
       remaining: pendingCount ?? 0,
       done,
       nextAfterSku,
+      details,
     };
   });
 

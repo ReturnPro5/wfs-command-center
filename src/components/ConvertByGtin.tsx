@@ -426,6 +426,7 @@ export function ConvertByGtin({ items }: Props) {
       let partial = 0;
       let failed = 0;
       let processed = 0;
+      const missingBySku: Array<{ sku: string; missing: string[]; error?: string }> = [];
       for (let i = 0; i < skus.length; i += CHUNK) {
         const chunk = skus.slice(i, i + CHUNK);
         const res = await enrichCatalogStep({
@@ -435,8 +436,22 @@ export function ConvertByGtin({ items }: Props) {
         partial += res.partial;
         failed += res.failed;
         processed += res.processed;
+        for (const d of res.details ?? []) {
+          if ((d.missing?.length ?? 0) > 0 || d.error) {
+            missingBySku.push({ sku: d.sku, missing: d.missing ?? [], error: d.error });
+          }
+        }
         setEnrichMsg(
           `Processed ${processed}/${skus.length} · enriched ${enriched} · partial ${partial} · errors ${failed}`
+        );
+      }
+      if (missingBySku.length > 0) {
+        const sample = missingBySku
+          .slice(0, 10)
+          .map((d) => `${d.sku}: ${d.error ?? d.missing.join(", ")}`)
+          .join(" · ");
+        setEnrichMsg(
+          `Processed ${processed}/${skus.length} · enriched ${enriched} · partial ${partial} · errors ${failed}. Still missing: ${sample}${missingBySku.length > 10 ? " …" : ""}`
         );
       }
       toast.success(
