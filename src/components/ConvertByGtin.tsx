@@ -218,6 +218,14 @@ export function ConvertByGtin({ items }: Props) {
     notFound: string[];
   } | null>(null);
 
+  // Dimensions import (brand / country of origin / dims / weight)
+  const dimFileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
+
+
+
   // Build GTIN/UPC -> SKU(s) map across the cached catalog AND any extras we
   // fetched ad-hoc for this paste.
   const idMap = useMemo(() => {
