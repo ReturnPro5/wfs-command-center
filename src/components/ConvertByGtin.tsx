@@ -40,6 +40,10 @@ export function ConvertByGtin({ items }: Props) {
   const [extraItems, setExtraItems] = useState<Map<string, CatalogIdentifier>>(new Map());
   // Tokens we already confirmed are not in Walmart this session — skip on re-lookup.
   const [knownNotFound, setKnownNotFound] = useState<Set<string>>(new Set());
+  // token (as pasted, digits-only) → set of SKUs resolved by the server. Used
+  // alongside idMap because Walmart's /v3/items search results often omit
+  // gtin/upc on the returned item, so we can't always re-index by identifier.
+  const [tokenToSkus, setTokenToSkus] = useState<Map<string, Set<string>>>(new Map());
   const [resolveSummary, setResolveSummary] = useState<{
     fetched: number;
     notFound: string[];
@@ -64,6 +68,7 @@ export function ConvertByGtin({ items }: Props) {
     for (const it of extraItems.values()) add(it);
     return m;
   }, [items, extraItems]);
+
 
   const tokens = useMemo(() => parsePasted(pasted), [pasted]);
 
