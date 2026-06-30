@@ -1815,7 +1815,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
     z
       .object({
-        identifiers: z.array(z.string().min(1).max(32)).min(1).max(500),
+        identifiers: z.array(z.string().min(1).max(32)).min(1).max(10000),
       })
       .parse(data)
   )
