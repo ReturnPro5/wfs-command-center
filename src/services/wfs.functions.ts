@@ -1825,14 +1825,20 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     );
     if (tokens.length === 0) return { resolved: [], notFound: [], fetched: 0 };
 
-    // 1) Check the cache by gtin OR upc match.
-    const { data: cached, error: cachedErr } = await supabaseAdmin
-      .from("catalog_items")
-      .select(
-        "sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at"
-      )
-      .or(`gtin.in.(${tokens.join(",")}),upc.in.(${tokens.join(",")})`);
-    if (cachedErr) throw new Error(`identifier cache lookup failed: ${cachedErr.message}`);
+    // 1) Check the cache by gtin OR upc match (chunked to keep URL length sane).
+    const cached: any[] = [];
+    const CACHE_CHUNK = 200;
+    for (let i = 0; i < tokens.length; i += CACHE_CHUNK) {
+      const chunk = tokens.slice(i, i + CACHE_CHUNK);
+      const { data: rows, error: cachedErr } = await supabaseAdmin
+        .from("catalog_items")
+        .select(
+          "sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at"
+        )
+        .or(`gtin.in.(${chunk.join(",")}),upc.in.(${chunk.join(",")})`);
+      if (cachedErr) throw new Error(`identifier cache lookup failed: ${cachedErr.message}`);
+      if (rows) cached.push(...rows);
+    }
 
     const cachedByToken = new Map<string, any[]>();
     for (const r of (cached ?? []) as any[]) {
