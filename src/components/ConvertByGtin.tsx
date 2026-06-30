@@ -265,8 +265,9 @@ export function ConvertByGtin({ items }: Props) {
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
-        Paste GTINs or UPCs (one per line, or comma/space separated). Items with condition{" "}
-        <strong>Open Box</strong> are eligible regardless of fulfillment, lifecycle, or published
+        Paste GTINs or UPCs (one per line, or comma/space separated). Only SKUs ending in{" "}
+        <strong>ND</strong> with condition <strong>Open Box</strong> are eligible (regardless of
+        fulfillment, lifecycle, or published
         status — Unpublished, Archived, and Retired SKUs are looked up directly against Walmart.
         Click <strong>Look up GTINs</strong> first to pull any identifiers not in the cached catalog,
         then submit.
