@@ -490,6 +490,12 @@ export function ConvertByGtin({ items }: Props) {
         </div>
       )}
 
+      {enrichMsg && (
+        <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
+          {enrichMsg}
+        </div>
+      )}
+
       {resolution.matched.length > 0 && (
         <details open className="rounded-md border border-border bg-secondary/20 p-3 text-xs">
           <summary className="cursor-pointer font-medium text-status-healthy">
