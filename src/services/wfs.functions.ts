@@ -1800,6 +1800,179 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
   }
 );
 
+// ─── Resolve identifiers (GTIN / UPC) against Walmart, any lifecycle ────
+// The default catalog sync only pulls ACTIVE+PUBLISHED items. When the
+// operator pastes GTINs into "Convert by GTIN" we look up any unknown
+// identifiers directly against /v3/items?gtin= (then ?upc=) so Unpublished,
+// Archived, and Retired SKUs are findable and convertible.
+export interface ResolveIdentifierResult {
+  resolved: CatalogIdentifier[];
+  notFound: string[];
+  fetched: number; // how many were newly pulled from Walmart this call
+}
+
+export const resolveIdentifiers = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        identifiers: z.array(z.string().min(1).max(32)).min(1).max(500),
+      })
+      .parse(data)
+  )
+  .handler(async ({ data }): Promise<ResolveIdentifierResult> => {
+    const tokens = Array.from(
+      new Set(data.identifiers.map((t) => t.replace(/[^0-9]/g, "")).filter(Boolean))
+    );
+    if (tokens.length === 0) return { resolved: [], notFound: [], fetched: 0 };
+
+    // 1) Check the cache by gtin OR upc match.
+    const { data: cached, error: cachedErr } = await supabaseAdmin
+      .from("catalog_items")
+      .select(
+        "sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at"
+      )
+      .or(`gtin.in.(${tokens.join(",")}),upc.in.(${tokens.join(",")})`);
+    if (cachedErr) throw new Error(`identifier cache lookup failed: ${cachedErr.message}`);
+
+    const cachedByToken = new Map<string, any[]>();
+    for (const r of (cached ?? []) as any[]) {
+      const g = (r.gtin ?? "").replace(/[^0-9]/g, "");
+      const u = (r.upc ?? "").replace(/[^0-9]/g, "");
+      if (g && tokens.includes(g)) {
+        const arr = cachedByToken.get(g) ?? [];
+        arr.push(r);
+        cachedByToken.set(g, arr);
+      }
+      if (u && u !== g && tokens.includes(u)) {
+        const arr = cachedByToken.get(u) ?? [];
+        arr.push(r);
+        cachedByToken.set(u, arr);
+      }
+    }
+
+    // 2) For tokens with no cache hit, query Walmart by gtin then upc.
+    await getWalmartAccessToken();
+    const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
+      getWfsFulfilledSkuSet(),
+      getItemReportFulfillmentMap(),
+    ]);
+
+    const missing = tokens.filter((t) => !cachedByToken.has(t));
+    const fetchedRows: any[] = [];
+    const notFound: string[] = [];
+    const CONCURRENCY = 4;
+    let cursor = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, missing.length) }, async () => {
+        while (cursor < missing.length) {
+          const idx = cursor++;
+          const token = missing[idx];
+          let list: any[] = [];
+          for (const kind of ["gtin", "upc"] as const) {
+            try {
+              const raw = await walmartApi.searchItemsByIdentifier(kind, token);
+              const page = (raw as any)?.payload ?? raw;
+              const candidates: any[] =
+                page?.ItemResponse ??
+                page?.itemResponse ??
+                page?.items ??
+                page?.elements ??
+                page?.list?.elements?.item ??
+                [];
+              if (candidates.length > 0) {
+                list = candidates;
+                break;
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) continue;
+              console.warn(`[WFS:resolve] ${kind}=${token} failed: ${msg}`);
+            }
+          }
+          if (list.length === 0) {
+            notFound.push(token);
+            continue;
+          }
+          for (const it of list) {
+            const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
+            if (!sku) continue;
+            const report = itemReportFulfillment.get(sku);
+            const gtin = String(it.gtin ?? it.GTIN ?? report?.gtin ?? "");
+            const upc = String(
+              it.upc ??
+                it.UPC ??
+                it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
+                report?.upc ??
+                ""
+            );
+            fetchedRows.push({
+              sku,
+              product_name: String(it.productName ?? it.product_name ?? it.name ?? report?.productName ?? ""),
+              gtin,
+              upc,
+              lifecycle: String(it.lifecycleStatus ?? it.lifecycle ?? "").toUpperCase() || "ACTIVE",
+              condition: String(it.condition ?? it.itemCondition ?? "New"),
+              published_status: String(it.publishedStatus ?? it.published_status ?? ""),
+              fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
+              category: String(it.productType ?? it.category ?? report?.productType ?? ""),
+              brand: report?.brand ?? "",
+              main_image_url: getItemImageUrl(it, report) ?? "",
+              price: typeof report?.price === "number" ? report.price : null,
+              product_type: report?.productType ?? "",
+              last_seen_at: new Date().toISOString(),
+              last_synced_at: new Date().toISOString(),
+            });
+          }
+        }
+      })
+    );
+
+    // 3) Upsert newly-fetched rows so they persist in the catalog cache.
+    if (fetchedRows.length > 0) {
+      const { error: upErr } = await supabaseAdmin
+        .from("catalog_items")
+        .upsert(fetchedRows as any, { onConflict: "sku", ignoreDuplicates: false });
+      if (upErr) throw new Error(`catalog upsert failed: ${upErr.message}`);
+    }
+
+    // 4) Build the merged resolved list (cache + newly-fetched).
+    const resolved: CatalogIdentifier[] = [];
+    const seen = new Set<string>();
+    const toIdent = (r: any): CatalogIdentifier => ({
+      sku: r.sku,
+      productName: r.product_name ?? "",
+      gtin: r.gtin ?? "",
+      upc: r.upc ?? "",
+      lifecycle: r.lifecycle ?? "",
+      condition: r.condition ?? "",
+      publishedStatus: r.published_status ?? "",
+      fulfillment: r.fulfillment ?? "Unknown",
+      category: (r.category && String(r.category).trim()) || r.product_type || "",
+      brand: r.brand ?? "",
+      mainImageUrl: r.main_image_url ?? "",
+      price: typeof r.price === "number" ? r.price : r.price == null ? null : Number(r.price),
+      productType: r.product_type ?? "",
+      enrichmentStatus: r.enrichment_status ?? "pending",
+      enrichedAt: r.enriched_at ?? null,
+    });
+    for (const arr of cachedByToken.values()) {
+      for (const r of arr) {
+        if (seen.has(r.sku)) continue;
+        seen.add(r.sku);
+        resolved.push(toIdent(r));
+      }
+    }
+    for (const r of fetchedRows) {
+      if (seen.has(r.sku)) continue;
+      seen.add(r.sku);
+      resolved.push(toIdent(r));
+    }
+
+    return { resolved, notFound, fetched: fetchedRows.length };
+  });
+
+
+
 const FULL_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export interface SyncStepResult {
