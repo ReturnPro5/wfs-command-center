@@ -297,6 +297,56 @@ export function ConvertByGtin({ items }: Props) {
 
 
 
+  async function runEnrich() {
+    const skus = resolution.matched.map((m) => m.item.sku);
+    if (skus.length === 0) {
+      toast.error("No eligible SKUs to enrich. Look up GTINs first.");
+      return;
+    }
+    setEnriching(true);
+    setEnrichMsg("");
+    setError(null);
+    try {
+      const CHUNK = 200;
+      let enriched = 0;
+      let partial = 0;
+      let failed = 0;
+      let processed = 0;
+      for (let i = 0; i < skus.length; i += CHUNK) {
+        const chunk = skus.slice(i, i + CHUNK);
+        const res = await enrichCatalogStep({
+          data: { batchSize: chunk.length, onlySkus: chunk, reenrich: true },
+        });
+        enriched += res.enriched;
+        partial += res.partial;
+        failed += res.failed;
+        processed += res.processed;
+        setEnrichMsg(
+          `Processed ${processed}/${skus.length} · enriched ${enriched} · partial ${partial} · errors ${failed}`
+        );
+      }
+      toast.success(
+        `Enriched ${enriched} (partial ${partial}, errors ${failed}). Re-run lookup or refresh to see latest fields.`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(`Enrichment failed: ${msg}`);
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  function runExport() {
+    const rows = resolution.matched.map((m) => m.item);
+    if (rows.length === 0) {
+      toast.error("No eligible SKUs to export. Look up GTINs first.");
+      return;
+    }
+    exportDimensionsTemplate(rows);
+    toast.success(`Exported ${rows.length.toLocaleString()} UPCs to CSV.`);
+  }
+
   async function runConvert() {
     setSubmitting(true);
     setError(null);
