@@ -3789,6 +3789,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
         batchSize: z.number().int().min(1).max(500).optional(),
         afterSku: z.string().optional(),
         reenrich: z.boolean().optional(),
+        onlySkus: z.array(z.string()).max(500).optional(),
       })
       .parse(data ?? {})
   )
@@ -3803,7 +3804,9 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
       .select("sku, brand, manufacturer, short_description, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit")
       .order("sku", { ascending: true })
       .limit(batchSize);
-    if (!data.reenrich) {
+    if (data.onlySkus && data.onlySkus.length > 0) {
+      query = query.in("sku", data.onlySkus);
+    } else if (!data.reenrich) {
       query = query.in("enrichment_status", ["pending", "error"]);
     }
     if (data.afterSku) query = query.gt("sku", data.afterSku);
@@ -3812,6 +3815,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     if (error) throw new Error(`enrichment read failed: ${error.message}`);
     const rowList = (rows ?? []) as any[];
     const skus = rowList.map((r: any) => r.sku);
+
     const reportMap = await reportMapPromise;
 
     let enriched = 0;
