@@ -202,6 +202,19 @@ export async function getItem(sku: string) {
   return walmartFetch<any>(`/v3/items/${encodeURIComponent(sku)}`);
 }
 
+// Search the items catalog by GTIN or UPC. Walmart's /v3/items endpoint
+// accepts `gtin` and `upc` query filters and returns matching items
+// regardless of lifecycle / publishedStatus, so this finds Unpublished,
+// Retired, and Archived SKUs that the normal ACTIVE+PUBLISHED sync skips.
+export async function searchItemsByIdentifier(
+  kind: "gtin" | "upc",
+  value: string
+) {
+  const params = new URLSearchParams({ limit: "20", [kind]: value });
+  return walmartFetch<any>(`/v3/items?${params}`);
+}
+
+
 // ─── Reports ────────────────────────────────────────────
 // The on-request ITEM report v4 is Walmart's documented source for
 // fulfillment type: WFS Eligible, Walmart Fulfilled, or Seller Fulfilled.
