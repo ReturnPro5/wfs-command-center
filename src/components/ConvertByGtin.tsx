@@ -28,6 +28,70 @@ function parsePasted(text: string): string[] {
   );
 }
 
+const DIM_TEMPLATE_HEADER = [
+  "SKU",
+  "UPC",
+  "ProductName",
+  "ProductType",
+  "Brand",
+  "Manufacturer",
+  "MainImageUrl",
+  "Price",
+  "CountryOfOrigin",
+  "DimensionD",
+  "DimensionW",
+  "DimensionH",
+  "ShippingWeight",
+] as const;
+
+function csvEscape(v: string): string {
+  return `"${(v ?? "").replace(/"/g, '""')}"`;
+}
+function csvEscapeId(v: string): string {
+  const s = (v ?? "").replace(/"/g, '""');
+  return s ? `'${s}` : "";
+}
+
+function exportDimensionsTemplate(rows: CatalogIdentifier[]) {
+  const lines = [DIM_TEMPLATE_HEADER.join(",")];
+  for (const r of rows) {
+    const anyR = r as any;
+    const brand = anyR.brand ?? "";
+    const mainImageUrl = anyR.mainImageUrl ?? "";
+    const productType = anyR.productType ?? anyR.category ?? "";
+    const price =
+      typeof anyR.price === "number" && Number.isFinite(anyR.price)
+        ? String(anyR.price)
+        : "";
+    lines.push(
+      [
+        csvEscapeId(r.sku),
+        csvEscapeId(r.upc ?? ""),
+        csvEscape(r.productName ?? ""),
+        csvEscape(productType),
+        csvEscape(brand),
+        "",
+        csvEscape(mainImageUrl),
+        price,
+        "",
+        "",
+        "",
+        "",
+        "",
+      ].join(",")
+    );
+  }
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `wfs-convert-template-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function ConvertByGtin({ items }: Props) {
   const [pasted, setPasted] = useState("");
   const [submitting, setSubmitting] = useState(false);
