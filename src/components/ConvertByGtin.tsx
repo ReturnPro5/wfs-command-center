@@ -683,6 +683,28 @@ export function ConvertByGtin({ items }: Props) {
         >
           Export UPCs ({resolution.matched.length.toLocaleString()})
         </button>
+        <input
+          ref={dimFileRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void onDimensionsFile(f);
+          }}
+        />
+        <button
+          onClick={() => dimFileRef.current?.click()}
+          disabled={importing}
+          className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          title="Upload a CSV with dimensions, country of origin, and brand to finish enriching SKUs"
+        >
+          {importing
+            ? importProgress
+              ? `Importing… ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()}`
+              : "Importing…"
+            : "Import CSV"}
+        </button>
         <button
           onClick={() => void runConvert()}
           disabled={submitting || resolution.matched.length === 0}
@@ -693,6 +715,28 @@ export function ConvertByGtin({ items }: Props) {
             : `Convert ${resolution.matched.length.toLocaleString()} to WFS`}
         </button>
       </div>
+
+      {importResult && (
+        <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-2">
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <span>Received: {importResult.received.toLocaleString()}</span>
+            <span className="text-status-healthy">Updated: {importResult.updated.toLocaleString()}</span>
+            <span className="text-muted-foreground">Skipped: {importResult.skipped.toLocaleString()}</span>
+            <span className="text-status-critical">Errors: {importResult.errors.length.toLocaleString()}</span>
+          </div>
+          {importResult.errors.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-status-critical">Show errors</summary>
+              <ul className="mt-1 max-h-48 overflow-y-auto space-y-0.5 font-mono">
+                {importResult.errors.slice(0, 500).map((e, i) => (
+                  <li key={i}><span className="text-primary">{e.sku}</span> — {e.reason}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+
 
       {progress && (
         <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-2">
