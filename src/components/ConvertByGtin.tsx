@@ -264,6 +264,27 @@ export function ConvertByGtin({ items }: Props) {
         </button>
       </div>
 
+      {progress && (
+        <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-2">
+          <div className="flex items-center justify-between font-medium">
+            <span>
+              {resolving ? "Looking up GTINs…" : "Lookup complete"} · {progress.done.toLocaleString()} / {progress.total.toLocaleString()}
+            </span>
+            <span className="text-muted-foreground">
+              {progress.resolved.toLocaleString()} found · {progress.notFound.toLocaleString()} not found
+            </span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+
+
 
       {(resolution.unmatched.length > 0 || resolution.ineligible.length > 0) && (
         <div className="grid gap-3 sm:grid-cols-2">
