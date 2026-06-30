@@ -1954,15 +1954,28 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
       })
     );
 
+    // Track which token resolved each SKU so the client can index extras under
+    // the originally-pasted identifier (Walmart search results often omit gtin/upc).
+    const matchedByToken: Record<string, string[]> = {};
+    const recordMatch = (token: string, sku: string) => {
+      if (!token || !sku) return;
+      const arr = matchedByToken[token] ?? (matchedByToken[token] = []);
+      if (!arr.includes(sku)) arr.push(sku);
+    };
+    for (const [tok, arr] of cachedByToken.entries()) {
+      for (const r of arr) recordMatch(tok, String(r.sku));
+    }
+
     // Only now (if we got any hits) await the heavy report data for enrichment.
     let wfsSkuSet: Set<string> = new Set();
     let itemReportFulfillment: Map<string, any> = new Map();
     if (hits.length > 0) {
       [wfsSkuSet, itemReportFulfillment] = await ensureReports();
-      for (const { list } of hits) {
+      for (const { token, list } of hits) {
         for (const it of list) {
           const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
           if (!sku) continue;
+          recordMatch(token, sku);
           const report = itemReportFulfillment.get(sku);
           const gtin = String(it.gtin ?? it.GTIN ?? report?.gtin ?? "");
           const upc = String(
@@ -1978,9 +1991,6 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
             gtin,
             upc,
             lifecycle: String(it.lifecycleStatus ?? it.lifecycle ?? "").toUpperCase() || "ACTIVE",
-            // Walmart's /v3/items search rarely returns a reliable condition. Leave
-            // it blank when missing so the Convert-by-GTIN path can treat it as
-            // "unknown — trust the operator" instead of defaulting to "New".
             condition: String(it.condition ?? it.itemCondition ?? ""),
             published_status: String(it.publishedStatus ?? it.published_status ?? ""),
             fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
@@ -1995,6 +2005,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
         }
       }
     }
+
 
     // 3) Upsert newly-fetched rows so they persist in the catalog cache.
     if (fetchedRows.length > 0) {
