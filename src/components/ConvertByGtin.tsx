@@ -445,6 +445,22 @@ export function ConvertByGtin({ items }: Props) {
           {resolving ? "Looking up…" : `Look up GTINs (${tokens.length.toLocaleString()})`}
         </button>
         <button
+          onClick={() => void runEnrich()}
+          disabled={enriching || resolution.matched.length === 0}
+          className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          title="Fetch the latest fields (brand, image, price, product type, etc.) from Walmart for the eligible SKUs"
+        >
+          {enriching ? "Enriching…" : `Enrich ${resolution.matched.length.toLocaleString()}`}
+        </button>
+        <button
+          onClick={runExport}
+          disabled={resolution.matched.length === 0}
+          className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          title="Download a CSV of UPCs (pre-filled where possible) so you can add dimensions and re-import"
+        >
+          Export UPCs ({resolution.matched.length.toLocaleString()})
+        </button>
+        <button
           onClick={() => void runConvert()}
           disabled={submitting || resolution.matched.length === 0}
           className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
