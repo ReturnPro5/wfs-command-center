@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  enrichCatalogStep,
   resolveIdentifiers,
   submitWfsConversion,
   type CatalogIdentifier,
@@ -27,9 +28,75 @@ function parsePasted(text: string): string[] {
   );
 }
 
+const DIM_TEMPLATE_HEADER = [
+  "SKU",
+  "UPC",
+  "ProductName",
+  "ProductType",
+  "Brand",
+  "Manufacturer",
+  "MainImageUrl",
+  "Price",
+  "CountryOfOrigin",
+  "DimensionD",
+  "DimensionW",
+  "DimensionH",
+  "ShippingWeight",
+] as const;
+
+function csvEscape(v: string): string {
+  return `"${(v ?? "").replace(/"/g, '""')}"`;
+}
+function csvEscapeId(v: string): string {
+  const s = (v ?? "").replace(/"/g, '""');
+  return s ? `'${s}` : "";
+}
+
+function exportDimensionsTemplate(rows: CatalogIdentifier[]) {
+  const lines = [DIM_TEMPLATE_HEADER.join(",")];
+  for (const r of rows) {
+    const anyR = r as any;
+    const brand = anyR.brand ?? "";
+    const mainImageUrl = anyR.mainImageUrl ?? "";
+    const productType = anyR.productType ?? anyR.category ?? "";
+    const price =
+      typeof anyR.price === "number" && Number.isFinite(anyR.price)
+        ? String(anyR.price)
+        : "";
+    lines.push(
+      [
+        csvEscapeId(r.sku),
+        csvEscapeId(r.upc ?? ""),
+        csvEscape(r.productName ?? ""),
+        csvEscape(productType),
+        csvEscape(brand),
+        "",
+        csvEscape(mainImageUrl),
+        price,
+        "",
+        "",
+        "",
+        "",
+        "",
+      ].join(",")
+    );
+  }
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `wfs-convert-template-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function ConvertByGtin({ items }: Props) {
   const [pasted, setPasted] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichMsg, setEnrichMsg] = useState<string>("");
   const [resolving, setResolving] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; resolved: number; notFound: number } | null>(null);
   const [result, setResult] = useState<WfsConversionRunResult | null>(null);
@@ -230,6 +297,56 @@ export function ConvertByGtin({ items }: Props) {
 
 
 
+  async function runEnrich() {
+    const skus = resolution.matched.map((m) => m.item.sku);
+    if (skus.length === 0) {
+      toast.error("No eligible SKUs to enrich. Look up GTINs first.");
+      return;
+    }
+    setEnriching(true);
+    setEnrichMsg("");
+    setError(null);
+    try {
+      const CHUNK = 200;
+      let enriched = 0;
+      let partial = 0;
+      let failed = 0;
+      let processed = 0;
+      for (let i = 0; i < skus.length; i += CHUNK) {
+        const chunk = skus.slice(i, i + CHUNK);
+        const res = await enrichCatalogStep({
+          data: { batchSize: chunk.length, onlySkus: chunk, reenrich: true },
+        });
+        enriched += res.enriched;
+        partial += res.partial;
+        failed += res.failed;
+        processed += res.processed;
+        setEnrichMsg(
+          `Processed ${processed}/${skus.length} · enriched ${enriched} · partial ${partial} · errors ${failed}`
+        );
+      }
+      toast.success(
+        `Enriched ${enriched} (partial ${partial}, errors ${failed}). Re-run lookup or refresh to see latest fields.`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(`Enrichment failed: ${msg}`);
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  function runExport() {
+    const rows = resolution.matched.map((m) => m.item);
+    if (rows.length === 0) {
+      toast.error("No eligible SKUs to export. Look up GTINs first.");
+      return;
+    }
+    exportDimensionsTemplate(rows);
+    toast.success(`Exported ${rows.length.toLocaleString()} UPCs to CSV.`);
+  }
+
   async function runConvert() {
     setSubmitting(true);
     setError(null);
@@ -328,6 +445,22 @@ export function ConvertByGtin({ items }: Props) {
           {resolving ? "Looking up…" : `Look up GTINs (${tokens.length.toLocaleString()})`}
         </button>
         <button
+          onClick={() => void runEnrich()}
+          disabled={enriching || resolution.matched.length === 0}
+          className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          title="Fetch the latest fields (brand, image, price, product type, etc.) from Walmart for the eligible SKUs"
+        >
+          {enriching ? "Enriching…" : `Enrich ${resolution.matched.length.toLocaleString()}`}
+        </button>
+        <button
+          onClick={runExport}
+          disabled={resolution.matched.length === 0}
+          className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          title="Download a CSV of UPCs (pre-filled where possible) so you can add dimensions and re-import"
+        >
+          Export UPCs ({resolution.matched.length.toLocaleString()})
+        </button>
+        <button
           onClick={() => void runConvert()}
           disabled={submitting || resolution.matched.length === 0}
           className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
@@ -354,6 +487,12 @@ export function ConvertByGtin({ items }: Props) {
               style={{ width: `${progress.total === 0 ? 0 : Math.round((progress.done / progress.total) * 100)}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {enrichMsg && (
+        <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
+          {enrichMsg}
         </div>
       )}
 
