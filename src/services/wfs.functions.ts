@@ -1831,6 +1831,35 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     );
     if (tokens.length === 0) return { resolved: [], notFound: [], rateLimited: [], fetched: 0, matchedByToken: {} };
 
+    const hasNdSku = (rows: any[] | undefined) =>
+      (rows ?? []).some((r) => /ND$/i.test(String(r?.sku ?? r?.SKU ?? r?.mart_sku ?? "")));
+
+    const identifierVariants = (token: string): string[] => {
+      const variants = new Set<string>([token]);
+      const trimmed = token.replace(/^0+/, "");
+      if (trimmed) variants.add(trimmed);
+      if (token.length > 12) variants.add(token.slice(-12));
+      if (token.length > 13) variants.add(token.slice(-13));
+      if (token.length === 12) variants.add(`00${token}`);
+      if (token.length === 13) variants.add(`0${token}`);
+      return Array.from(variants).filter(Boolean);
+    };
+
+    const parseSearchPage = (raw: any): { candidates: any[]; nextCursor: string | null } => {
+      const page = raw?.payload ?? raw;
+      const candidates: any[] =
+        page?.ItemResponse ??
+        page?.itemResponse ??
+        page?.items ??
+        page?.elements ??
+        page?.list?.elements?.item ??
+        [];
+      let nextCursor: string | null =
+        page?.nextCursor ?? page?.meta?.nextCursor ?? page?.list?.meta?.nextCursor ?? null;
+      if (nextCursor === "*" || nextCursor === "") nextCursor = null;
+      return { candidates, nextCursor };
+    };
+
     // 1) Check the cache by gtin OR upc match (chunked to keep URL length sane).
     const cached: any[] = [];
     const CACHE_CHUNK = 200;
@@ -1862,8 +1891,11 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
       }
     }
 
-    // 2) For tokens with no cache hit, query Walmart by gtin then upc.
-    const missing = tokens.filter((t) => !cachedByToken.has(t));
+    // 2) Query Walmart when the cache does not already contain an ND SKU.
+    // A token can have a cached non-ND seller SKU while the Open Box ND sibling
+    // exists in Walmart under the GTIN-14 or UPC-12 variant, so exact cache hits
+    // are not enough to stop the direct Walmart lookup.
+    const missing = tokens.filter((t) => !hasNdSku(cachedByToken.get(t)));
     const fetchedRows: any[] = [];
     const notFound: string[] = [];
     // Kick off the (expensive) Item Report v6 + WFS SKU set downloads in parallel
@@ -1913,21 +1945,29 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
           const token = missing[idx];
           let list: any[] = [];
           let throttled = false;
+          const variants = identifierVariants(token);
           for (const kind of ["gtin", "upc"] as const) {
+            for (const searchValue of variants) {
             let attempt = 0;
             while (attempt <= MAX_429_RETRIES) {
               try {
-                const raw = await walmartApi.searchItemsByIdentifier(kind, token);
-                const page = (raw as any)?.payload ?? raw;
-                const candidates: any[] =
-                  page?.ItemResponse ??
-                  page?.itemResponse ??
-                  page?.items ??
-                  page?.elements ??
-                  page?.list?.elements?.item ??
-                  [];
-                if (candidates.length > 0) list = candidates;
-                break; // success (with or without candidates) — try next kind
+                let nextCursor: string | null = "*";
+                let pages = 0;
+                do {
+                  const raw = await walmartApi.searchItemsByIdentifier(kind, searchValue, nextCursor ?? undefined);
+                  const page = parseSearchPage(raw);
+                  for (const candidate of page.candidates) {
+                    const sku = String(candidate?.sku ?? candidate?.SKU ?? candidate?.mart_sku ?? "");
+                    if (sku && !list.some((existing) => String(existing?.sku ?? existing?.SKU ?? existing?.mart_sku ?? "") === sku)) {
+                      list.push(candidate);
+                    }
+                  }
+                  nextCursor = page.nextCursor;
+                  pages++;
+                  // The endpoint returns up to 200 now; five pages is already far
+                  // beyond the variants expected for one GTIN and prevents runaway loops.
+                } while (nextCursor && pages < 5);
+                break; // success (with or without candidates) — try next variant/kind
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 if (msg.includes("[404]") || msg.includes("CONTENT_NOT_FOUND")) break;
@@ -1945,7 +1985,9 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
                 break;
               }
             }
-            if (list.length > 0 || throttled) break;
+            if (throttled || hasNdSku(list)) break;
+            }
+            if (throttled || hasNdSku(list)) break;
           }
           if (throttled) {
             rateLimited.push(token);

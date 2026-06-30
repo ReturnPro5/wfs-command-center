@@ -208,9 +208,11 @@ export async function getItem(sku: string) {
 // Retired, and Archived SKUs that the normal ACTIVE+PUBLISHED sync skips.
 export async function searchItemsByIdentifier(
   kind: "gtin" | "upc",
-  value: string
+  value: string,
+  nextCursor?: string
 ) {
-  const params = new URLSearchParams({ limit: "20", [kind]: value });
+  const params = new URLSearchParams({ limit: "200", [kind]: value });
+  if (nextCursor) params.set("nextCursor", nextCursor);
   return walmartFetch<any>(`/v3/items?${params}`);
 }
 
