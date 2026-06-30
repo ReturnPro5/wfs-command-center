@@ -38,6 +38,28 @@ type Row = CatalogIdentifier & { sds: SdsClassification };
 type SdsFilter = "ALL" | SdsRequirement;
 
 
+function normalizeId(s: string): string {
+  return s.replace(/[^0-9]/g, "");
+}
+
+function identifierVariants(s: string | undefined): string[] {
+  const digits = normalizeId(s ?? "");
+  if (!digits) return [];
+  const variants = new Set<string>([digits]);
+  const withoutLeadingZeroes = digits.replace(/^0+/, "");
+  if (withoutLeadingZeroes) variants.add(withoutLeadingZeroes);
+  if (digits.length === 12) {
+    variants.add(`0${digits}`);
+    variants.add(`00${digits}`);
+  }
+  if (digits.length === 13 && digits.startsWith("0")) variants.add(digits.slice(1));
+  if (digits.length === 14) {
+    if (digits.startsWith("00")) variants.add(digits.slice(2));
+    if (digits.startsWith("0")) variants.add(digits.slice(1));
+  }
+  return Array.from(variants);
+}
+
 
 // Convert-to-WFS template columns. SKU is the canonical key; UPC is
 // included as a fallback identifier so a Walmart-style "UPC only" import
@@ -217,12 +239,12 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
     return Number.isFinite(n) && n > 0 ? n : null;
   };
   const clean = (s: string | undefined): string =>
-    (s ?? "").replace(/[",=]/g, "").replace(/^'/, "").trim();
+    (s ?? "").replace(/^\ufeff/, "").trim().replace(/[",=]/g, "").replace(/^'+/, "").trim();
   const rows: ParsedDimRow[] = [];
   for (let r = 1; r < grid.length; r++) {
     const cells = grid[r];
     const sku = iSku >= 0 ? clean(cells[iSku]) : "";
-    const upc = iUpc >= 0 ? clean(cells[iUpc]) : "";
+      const upc = iUpc >= 0 ? normalizeId(clean(cells[iUpc])) : "";
     if (!sku && !upc) continue;
     rows.push({
       sku: sku || undefined,
@@ -447,16 +469,17 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       if (errors.length > 0) throw new Error(errors.join("; "));
       if (parsed.length === 0) throw new Error("no data rows found");
 
-      // Build UPC -> SKU(s) lookup from current catalog so a UPC-keyed import
-      // file (Walmart's "UPC,DimensionD,DimensionW,DimensionH,ShippingWeight"
-      // export format) can be applied to every matching SKU.
-      const upcToSkus = new Map<string, string[]>();
+      // Build UPC/GTIN -> SKU(s) lookup from current catalog so a UPC-keyed import
+      // file can still match rows where Walmart stores the identifier as a GTIN.
+      const idToSkus = new Map<string, string[]>();
+      const addIdentifier = (key: string, sku: string) => {
+        const arr = idToSkus.get(key) ?? [];
+        if (!arr.includes(sku)) arr.push(sku);
+        idToSkus.set(key, arr);
+      };
       for (const it of items) {
-        const u = (it.upc ?? "").replace(/[^0-9]/g, "");
-        if (!u) continue;
-        const arr = upcToSkus.get(u) ?? [];
-        arr.push(it.sku);
-        upcToSkus.set(u, arr);
+        for (const u of identifierVariants(it.upc)) addIdentifier(u, it.sku);
+        for (const g of identifierVariants(it.gtin)) addIdentifier(g, it.sku);
       }
 
       type ResolvedRow = {
@@ -492,9 +515,11 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           resolved.push(rowFor(r.sku, r));
           continue;
         }
-        const u = (r.upc ?? "").replace(/[^0-9]/g, "");
-        const skus = upcToSkus.get(u);
-        if (!skus || skus.length === 0) {
+        const skus = new Set<string>();
+        for (const u of identifierVariants(r.upc)) {
+          for (const sku of idToSkus.get(u) ?? []) skus.add(sku);
+        }
+        if (skus.size === 0) {
           unresolved++;
           continue;
         }

@@ -20,6 +20,24 @@ function normalizeId(s: string): string {
   return s.replace(/[^0-9]/g, "");
 }
 
+function identifierVariants(s: string | undefined): string[] {
+  const digits = normalizeId(s ?? "");
+  if (!digits) return [];
+  const variants = new Set<string>([digits]);
+  const withoutLeadingZeroes = digits.replace(/^0+/, "");
+  if (withoutLeadingZeroes) variants.add(withoutLeadingZeroes);
+  if (digits.length === 12) {
+    variants.add(`0${digits}`);
+    variants.add(`00${digits}`);
+  }
+  if (digits.length === 13 && digits.startsWith("0")) variants.add(digits.slice(1));
+  if (digits.length === 14) {
+    if (digits.startsWith("00")) variants.add(digits.slice(2));
+    if (digits.startsWith("0")) variants.add(digits.slice(1));
+  }
+  return Array.from(variants);
+}
+
 function parsePasted(text: string): string[] {
   return Array.from(
     new Set(
@@ -168,12 +186,12 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
     return Number.isFinite(n) && n > 0 ? n : null;
   };
   const clean = (s: string | undefined): string =>
-    (s ?? "").replace(/[",=]/g, "").replace(/^'/, "").trim();
+    (s ?? "").replace(/^\ufeff/, "").trim().replace(/[",=]/g, "").replace(/^'+/, "").trim();
   const rows: ParsedDimRow[] = [];
   for (let r = 1; r < grid.length; r++) {
     const cells = grid[r];
     const sku = iSku >= 0 ? clean(cells[iSku]) : "";
-    const upc = iUpc >= 0 ? clean(cells[iUpc]) : "";
+      const upc = iUpc >= 0 ? normalizeId(clean(cells[iUpc])) : "";
     if (!sku && !upc) continue;
     rows.push({
       sku: sku || undefined,
@@ -236,10 +254,8 @@ export function ConvertByGtin({ items }: Props) {
       m.set(key, arr);
     };
     const add = (it: CatalogIdentifier) => {
-      const g = normalizeId(it.gtin ?? "");
-      const u = normalizeId(it.upc ?? "");
-      if (g) push(g, it);
-      if (u && u !== g) push(u, it);
+      for (const g of identifierVariants(it.gtin)) push(g, it);
+      for (const u of identifierVariants(it.upc)) push(u, it);
     };
     for (const it of items) add(it);
     for (const it of extraItems.values()) add(it);
@@ -486,17 +502,20 @@ export function ConvertByGtin({ items }: Props) {
       if (errors.length > 0) throw new Error(errors.join("; "));
       if (parsed.length === 0) throw new Error("no data rows found");
 
-      // UPC -> SKU(s) lookup from cached catalog + any extras fetched ad-hoc.
-      const upcToSkus = new Map<string, string[]>();
-      const addUpc = (it: CatalogIdentifier) => {
-        const u = (it.upc ?? "").replace(/[^0-9]/g, "");
-        if (!u) return;
-        const arr = upcToSkus.get(u) ?? [];
-        if (!arr.includes(it.sku)) arr.push(it.sku);
-        upcToSkus.set(u, arr);
+      // UPC/GTIN -> SKU(s) lookup from cached catalog + any extras fetched ad-hoc.
+      // Import files often contain a 12-digit UPC while Walmart stores a 14-digit GTIN.
+      const idToSkus = new Map<string, string[]>();
+      const addIdentifier = (key: string, sku: string) => {
+        const arr = idToSkus.get(key) ?? [];
+        if (!arr.includes(sku)) arr.push(sku);
+        idToSkus.set(key, arr);
       };
-      for (const it of items) addUpc(it);
-      for (const it of extraItems.values()) addUpc(it);
+      const addIds = (it: CatalogIdentifier) => {
+        for (const u of identifierVariants(it.upc)) addIdentifier(u, it.sku);
+        for (const g of identifierVariants(it.gtin)) addIdentifier(g, it.sku);
+      };
+      for (const it of items) addIds(it);
+      for (const it of extraItems.values()) addIds(it);
 
       type ResolvedRow = {
         sku: string;
@@ -531,9 +550,11 @@ export function ConvertByGtin({ items }: Props) {
           resolved.push(rowFor(r.sku, r));
           continue;
         }
-        const u = (r.upc ?? "").replace(/[^0-9]/g, "");
-        const skus = upcToSkus.get(u);
-        if (!skus || skus.length === 0) {
+        const skus = new Set<string>();
+        for (const u of identifierVariants(r.upc)) {
+          for (const sku of idToSkus.get(u) ?? []) skus.add(sku);
+        }
+        if (skus.size === 0) {
           unresolved++;
           continue;
         }
