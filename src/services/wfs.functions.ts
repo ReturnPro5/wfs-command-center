@@ -1860,20 +1860,34 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     const missing = tokens.filter((t) => !cachedByToken.has(t));
     const fetchedRows: any[] = [];
     const notFound: string[] = [];
-    // Skip expensive Item Report v6 + WFS SKU set fetches when nothing is missing —
-    // those downloads can take tens of seconds and were running on every 50-token batch
-    // even when all tokens were already cached or already confirmed not-found.
-    let wfsSkuSet: Set<string> = new Set();
-    let itemReportFulfillment: Map<string, any> = new Map();
+    // Kick off the (expensive) Item Report v6 + WFS SKU set downloads in parallel
+    // with the per-token searches instead of blocking on them first. They're only
+    // needed to enrich metadata when we actually find new items; for batches that
+    // are entirely "not in Walmart" we never await them. Both are memoized with a
+    // 2-minute TTL, so subsequent batches reuse the cached result.
+    let reportPromise: Promise<[Set<string>, Map<string, any>]> | null = null;
+    const ensureReports = () => {
+      if (!reportPromise) {
+        reportPromise = (async () => {
+          await getWalmartAccessToken();
+          const [a, b] = await Promise.all([
+            getWfsFulfilledSkuSet(),
+            getItemReportFulfillmentMap(),
+          ]);
+          return [a, b] as [Set<string>, Map<string, any>];
+        })();
+      }
+      return reportPromise;
+    };
     if (missing.length > 0) {
+      // Pre-warm token + reports in background so they're ready by the time we hit a match.
+      void ensureReports();
+      // Also ensure the access token is acquired before the parallel search workers spin up.
       await getWalmartAccessToken();
-      [wfsSkuSet, itemReportFulfillment] = await Promise.all([
-        getWfsFulfilledSkuSet(),
-        getItemReportFulfillmentMap(),
-      ]);
     }
     const CONCURRENCY = 12;
     let cursor = 0;
+    const hits: Array<{ token: string; list: any[] }> = [];
     await Promise.all(
       Array.from({ length: Math.min(CONCURRENCY, missing.length) }, async () => {
         while (cursor < missing.length) {
@@ -1905,39 +1919,49 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
             notFound.push(token);
             continue;
           }
-          for (const it of list) {
-            const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
-            if (!sku) continue;
-            const report = itemReportFulfillment.get(sku);
-            const gtin = String(it.gtin ?? it.GTIN ?? report?.gtin ?? "");
-            const upc = String(
-              it.upc ??
-                it.UPC ??
-                it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
-                report?.upc ??
-                ""
-            );
-            fetchedRows.push({
-              sku,
-              product_name: String(it.productName ?? it.product_name ?? it.name ?? report?.productName ?? ""),
-              gtin,
-              upc,
-              lifecycle: String(it.lifecycleStatus ?? it.lifecycle ?? "").toUpperCase() || "ACTIVE",
-              condition: String(it.condition ?? it.itemCondition ?? "New"),
-              published_status: String(it.publishedStatus ?? it.published_status ?? ""),
-              fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
-              category: String(it.productType ?? it.category ?? report?.productType ?? ""),
-              brand: report?.brand ?? "",
-              main_image_url: getItemImageUrl(it, report) ?? "",
-              price: typeof report?.price === "number" ? report.price : null,
-              product_type: report?.productType ?? "",
-              last_seen_at: new Date().toISOString(),
-              last_synced_at: new Date().toISOString(),
-            });
-          }
+          hits.push({ token, list });
         }
       })
     );
+
+    // Only now (if we got any hits) await the heavy report data for enrichment.
+    let wfsSkuSet: Set<string> = new Set();
+    let itemReportFulfillment: Map<string, any> = new Map();
+    if (hits.length > 0) {
+      [wfsSkuSet, itemReportFulfillment] = await ensureReports();
+      for (const { list } of hits) {
+        for (const it of list) {
+          const sku = String(it.sku ?? it.SKU ?? it.mart_sku ?? "");
+          if (!sku) continue;
+          const report = itemReportFulfillment.get(sku);
+          const gtin = String(it.gtin ?? it.GTIN ?? report?.gtin ?? "");
+          const upc = String(
+            it.upc ??
+              it.UPC ??
+              it.productIdentifiers?.find?.((p: any) => p.productIdType === "UPC")?.productId ??
+              report?.upc ??
+              ""
+          );
+          fetchedRows.push({
+            sku,
+            product_name: String(it.productName ?? it.product_name ?? it.name ?? report?.productName ?? ""),
+            gtin,
+            upc,
+            lifecycle: String(it.lifecycleStatus ?? it.lifecycle ?? "").toUpperCase() || "ACTIVE",
+            condition: String(it.condition ?? it.itemCondition ?? "New"),
+            published_status: String(it.publishedStatus ?? it.published_status ?? ""),
+            fulfillment: deriveFulfillment(it, wfsSkuSet, itemReportFulfillment),
+            category: String(it.productType ?? it.category ?? report?.productType ?? ""),
+            brand: report?.brand ?? "",
+            main_image_url: getItemImageUrl(it, report) ?? "",
+            price: typeof report?.price === "number" ? report.price : null,
+            product_type: report?.productType ?? "",
+            last_seen_at: new Date().toISOString(),
+            last_synced_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
 
     // 3) Upsert newly-fetched rows so they persist in the catalog cache.
     if (fetchedRows.length > 0) {
