@@ -2959,9 +2959,11 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       }
       // Bulk Convert only handles Open Box items — any other condition is
       // rejected before we build the payload so we never trigger Walmart's
-      // "condition differs from Seller Catalog" error.
+      // "condition differs from Seller Catalog" error. Blank/unknown is
+      // allowed (search-API resolved SKUs don't expose condition) and the
+      // payload hardcodes "Open Box"; Walmart will reject any mismatch.
       const condNorm = String(r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
-      if (condNorm !== "openbox") {
+      if (condNorm && condNorm !== "openbox") {
         preflightFailed.push({
           sku,
           status: "INELIGIBLE_CONDITION",
