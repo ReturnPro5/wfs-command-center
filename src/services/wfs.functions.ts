@@ -1810,7 +1810,12 @@ export interface ResolveIdentifierResult {
   notFound: string[];
   rateLimited: string[]; // hit 429 even after retries — retry these in another batch
   fetched: number; // how many were newly pulled from Walmart this call
+  // token (gtin/upc as pasted) → list of SKUs that matched it. Used by the
+  // client to index extras under the original search token, since Walmart's
+  // /v3/items search results don't always populate gtin/upc on each item.
+  matchedByToken: Record<string, string[]>;
 }
+
 
 export const resolveIdentifiers = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) =>
