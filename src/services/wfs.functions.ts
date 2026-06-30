@@ -3797,7 +3797,14 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const batchSize = data.batchSize ?? 200;
     await getWalmartAccessToken();
 
-    const reportMapPromise = getItemReportFulfillmentMap();
+    // Targeted Convert-by-GTIN enrichment can be as small as one SKU. Pulling
+    // the full Walmart Item Report for that path can exceed the worker memory
+    // limit before we even fetch the SKU, so only use the report for broader
+    // catalog enrichment runs.
+    const shouldUseItemReport = !data.onlySkus || data.onlySkus.length === 0;
+    const reportMapPromise = shouldUseItemReport
+      ? getItemReportFulfillmentMap()
+      : Promise.resolve(new Map<string, any>());
 
     let query = supabaseAdmin
       .from("catalog_items")
