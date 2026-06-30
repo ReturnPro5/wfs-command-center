@@ -31,6 +31,7 @@ export function ConvertByGtin({ items }: Props) {
   const [pasted, setPasted] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [resolving, setResolving] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number; resolved: number; notFound: number } | null>(null);
   const [result, setResult] = useState<WfsConversionRunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [convertedSkus, setConvertedSkus] = useState<Set<string>>(new Set());
