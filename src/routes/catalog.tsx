@@ -392,6 +392,7 @@ function CatalogPage() {
           <TabsList>
             <TabsTrigger value="identifiers">Identifiers</TabsTrigger>
             <TabsTrigger value="convert">Bulk Convert to WFS</TabsTrigger>
+            <TabsTrigger value="convert-gtin">Convert by GTIN</TabsTrigger>
           </TabsList>
 
           <TabsContent value="identifiers" className="space-y-4">
