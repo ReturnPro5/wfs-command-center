@@ -502,8 +502,9 @@ export function ConvertByGtin({ items }: Props) {
       if (errors.length > 0) throw new Error(errors.join("; "));
       if (parsed.length === 0) throw new Error("no data rows found");
 
-      // UPC/GTIN -> SKU(s) lookup from cached catalog + any extras fetched ad-hoc.
-      // Import files often contain a 12-digit UPC while Walmart stores a 14-digit GTIN.
+      // UPC/GTIN -> SKU(s) lookup from the current Convert by GTIN results.
+      // Prefer eligible looked-up ND/Open Box matches over any same-UPC non-ND
+      // catalog row, because this import is meant to enrich the conversion list.
       const idToSkus = new Map<string, string[]>();
       const addIdentifier = (key: string, sku: string) => {
         const arr = idToSkus.get(key) ?? [];
@@ -514,8 +515,15 @@ export function ConvertByGtin({ items }: Props) {
         for (const u of identifierVariants(it.upc)) addIdentifier(u, it.sku);
         for (const g of identifierVariants(it.gtin)) addIdentifier(g, it.sku);
       };
-      for (const it of items) addIds(it);
-      for (const it of extraItems.values()) addIds(it);
+      if (resolution.matched.length > 0) {
+        for (const { token, item } of resolution.matched) {
+          for (const t of identifierVariants(token)) addIdentifier(t, item.sku);
+          addIds(item);
+        }
+      } else {
+        for (const it of items) addIds(it);
+        for (const it of extraItems.values()) addIds(it);
+      }
 
       type ResolvedRow = {
         sku: string;
