@@ -1935,11 +1935,16 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
 
     // 3) Upsert newly-fetched rows so they persist in the catalog cache.
     if (fetchedRows.length > 0) {
+      // Dedupe by sku — same SKU can be resolved from multiple identifiers (gtin + upc)
+      const bySku = new Map<string, (typeof fetchedRows)[number]>();
+      for (const r of fetchedRows) bySku.set(r.sku, r);
+      const uniqueRows = Array.from(bySku.values());
       const { error: upErr } = await supabaseAdmin
         .from("catalog_items")
-        .upsert(fetchedRows as any, { onConflict: "sku", ignoreDuplicates: false });
+        .upsert(uniqueRows as any, { onConflict: "sku", ignoreDuplicates: false });
       if (upErr) throw new Error(`catalog upsert failed: ${upErr.message}`);
     }
+
 
     // 4) Build the merged resolved list (cache + newly-fetched).
     const resolved: CatalogIdentifier[] = [];
