@@ -1,17 +1,20 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   enrichCatalogStep,
+  importDimensions,
   resolveIdentifiers,
   submitWfsConversion,
   type CatalogIdentifier,
+  type ImportDimensionsResult,
   type WfsConversionRunResult,
 } from "@/services/wfs.functions";
 
 interface Props {
   items: CatalogIdentifier[];
 }
+
 
 function normalizeId(s: string): string {
   return s.replace(/[^0-9]/g, "");
@@ -92,6 +95,105 @@ function exportDimensionsTemplate(rows: CatalogIdentifier[]) {
   URL.revokeObjectURL(url);
 }
 
+// ─── Dimensions CSV import (mirrors BulkConvertWfs) ───────────────────────
+function parseCsv(text: string): string[][] {
+  const out: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let i = 0;
+  let inQuotes = false;
+  const src = text.replace(/\r\n?/g, "\n");
+  while (i < src.length) {
+    const c = src[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (src[i + 1] === '"') { cell += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      cell += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ",") { row.push(cell); cell = ""; i++; continue; }
+    if (c === "\n") { row.push(cell); out.push(row); row = []; cell = ""; i++; continue; }
+    if (c === "=" && src[i + 1] === '"') { i++; continue; }
+    cell += c; i++;
+  }
+  if (cell.length > 0 || row.length > 0) { row.push(cell); out.push(row); }
+  return out.filter((r) => r.length > 1 || (r[0] && r[0].trim() !== ""));
+}
+
+interface ParsedDimRow {
+  sku?: string;
+  upc?: string;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+  weight: number | null;
+  countryOfOrigin?: string;
+  brand?: string;
+  manufacturer?: string;
+  mainImageUrl?: string;
+  productType?: string;
+  price?: number | null;
+}
+
+function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: string[] } {
+  const errors: string[] = [];
+  const grid = parseCsv(text);
+  if (grid.length === 0) return { rows: [], errors: ["empty file"] };
+  const header = grid[0].map((h) => h.trim().toLowerCase().replace(/^\ufeff/, ""));
+  const idx = (names: string[]) =>
+    header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
+  const iSku = idx(["sku"]);
+  const iUpc = idx(["upc"]);
+  const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
+  const iWid = idx(["width", "dimensionw", "dimension w"]);
+  const iHei = idx(["height", "dimensionh", "dimension h"]);
+  const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country"]);
+  const iBrand = idx(["brand"]);
+  const iMfr = idx(["manufacturer", "mfr"]);
+  const iImg = idx(["mainimageurl", "main image url", "imageurl", "image"]);
+  const iPt = idx(["producttype", "product type", "category"]);
+  const iPrice = idx(["price"]);
+  if (iSku < 0 && iUpc < 0) {
+    errors.push("missing SKU or UPC column");
+    return { rows: [], errors };
+  }
+  const num = (s: string | undefined): number | null => {
+    if (s == null) return null;
+    const t = s.replace(/[",=$']/g, "").trim();
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const clean = (s: string | undefined): string =>
+    (s ?? "").replace(/[",=]/g, "").replace(/^'/, "").trim();
+  const rows: ParsedDimRow[] = [];
+  for (let r = 1; r < grid.length; r++) {
+    const cells = grid[r];
+    const sku = iSku >= 0 ? clean(cells[iSku]) : "";
+    const upc = iUpc >= 0 ? clean(cells[iUpc]) : "";
+    if (!sku && !upc) continue;
+    rows.push({
+      sku: sku || undefined,
+      upc: upc || undefined,
+      length: iLen >= 0 ? num(cells[iLen]) : null,
+      width: iWid >= 0 ? num(cells[iWid]) : null,
+      height: iHei >= 0 ? num(cells[iHei]) : null,
+      weight: iWgt >= 0 ? num(cells[iWgt]) : null,
+      countryOfOrigin: iCoo >= 0 ? clean(cells[iCoo]) || undefined : undefined,
+      brand: iBrand >= 0 ? clean(cells[iBrand]) || undefined : undefined,
+      manufacturer: iMfr >= 0 ? clean(cells[iMfr]) || undefined : undefined,
+      mainImageUrl: iImg >= 0 ? clean(cells[iImg]) || undefined : undefined,
+      productType: iPt >= 0 ? clean(cells[iPt]) || undefined : undefined,
+      price: iPrice >= 0 ? num(cells[iPrice]) : null,
+    });
+  }
+  return { rows, errors };
+}
+
+
 export function ConvertByGtin({ items }: Props) {
   const [pasted, setPasted] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -115,6 +217,14 @@ export function ConvertByGtin({ items }: Props) {
     fetched: number;
     notFound: string[];
   } | null>(null);
+
+  // Dimensions import (brand / country of origin / dims / weight)
+  const dimFileRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+  const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
+
+
 
   // Build GTIN/UPC -> SKU(s) map across the cached catalog AND any extras we
   // fetched ad-hoc for this paste.
@@ -347,6 +457,119 @@ export function ConvertByGtin({ items }: Props) {
     toast.success(`Exported ${rows.length.toLocaleString()} UPCs to CSV.`);
   }
 
+  async function onDimensionsFile(file: File) {
+    setImporting(true);
+    setImportResult(null);
+    setImportProgress(null);
+    try {
+      const text = await file.text();
+      const { rows: parsed, errors } = parseDimensionsCsv(text);
+      if (errors.length > 0) throw new Error(errors.join("; "));
+      if (parsed.length === 0) throw new Error("no data rows found");
+
+      // UPC -> SKU(s) lookup from cached catalog + any extras fetched ad-hoc.
+      const upcToSkus = new Map<string, string[]>();
+      const addUpc = (it: CatalogIdentifier) => {
+        const u = (it.upc ?? "").replace(/[^0-9]/g, "");
+        if (!u) return;
+        const arr = upcToSkus.get(u) ?? [];
+        if (!arr.includes(it.sku)) arr.push(it.sku);
+        upcToSkus.set(u, arr);
+      };
+      for (const it of items) addUpc(it);
+      for (const it of extraItems.values()) addUpc(it);
+
+      type ResolvedRow = {
+        sku: string;
+        length: number | null;
+        width: number | null;
+        height: number | null;
+        weight: number | null;
+        countryOfOrigin?: string;
+        brand?: string;
+        manufacturer?: string;
+        mainImageUrl?: string;
+        productType?: string;
+        price?: number | null;
+      };
+      const rowFor = (sku: string, r: ParsedDimRow): ResolvedRow => ({
+        sku,
+        length: r.length,
+        width: r.width,
+        height: r.height,
+        weight: r.weight,
+        countryOfOrigin: r.countryOfOrigin,
+        brand: r.brand,
+        manufacturer: r.manufacturer,
+        mainImageUrl: r.mainImageUrl,
+        productType: r.productType,
+        price: r.price,
+      });
+      const resolved: ResolvedRow[] = [];
+      let unresolved = 0;
+      for (const r of parsed) {
+        if (r.sku) {
+          resolved.push(rowFor(r.sku, r));
+          continue;
+        }
+        const u = (r.upc ?? "").replace(/[^0-9]/g, "");
+        const skus = upcToSkus.get(u);
+        if (!skus || skus.length === 0) {
+          unresolved++;
+          continue;
+        }
+        for (const sku of skus) resolved.push(rowFor(sku, r));
+      }
+      if (resolved.length === 0) {
+        throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
+      }
+
+      const BATCH = 500;
+      const CLIENT_CONCURRENCY = 4;
+      const chunks: ResolvedRow[][] = [];
+      for (let i = 0; i < resolved.length; i += BATCH) chunks.push(resolved.slice(i, i + BATCH));
+      let updated = 0;
+      let skipped = 0;
+      const allErrors: Array<{ sku: string; reason: string }> = [];
+      let done = 0;
+      setImportProgress({ done: 0, total: resolved.length });
+      let cursor = 0;
+      await Promise.all(
+        Array.from({ length: CLIENT_CONCURRENCY }, async () => {
+          while (cursor < chunks.length) {
+            const idx = cursor++;
+            const chunk = chunks[idx];
+            const res = await importDimensions({ data: { rows: chunk } });
+            updated += res.updated;
+            skipped += res.skipped;
+            allErrors.push(...res.errors);
+            done += chunk.length;
+            setImportProgress({ done, total: resolved.length });
+          }
+        })
+      );
+      const finalRes: ImportDimensionsResult = {
+        received: resolved.length,
+        updated,
+        skipped,
+        errors: allErrors,
+      };
+      setImportResult(finalRes);
+      toast.success(
+        `Updated ${updated.toLocaleString()} SKUs · skipped ${skipped.toLocaleString()} · ${allErrors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error(`Import failed: ${msg}`);
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+      if (dimFileRef.current) dimFileRef.current.value = "";
+    }
+  }
+
+
+
   async function runConvert() {
     setSubmitting(true);
     setError(null);
@@ -460,6 +683,28 @@ export function ConvertByGtin({ items }: Props) {
         >
           Export UPCs ({resolution.matched.length.toLocaleString()})
         </button>
+        <input
+          ref={dimFileRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void onDimensionsFile(f);
+          }}
+        />
+        <button
+          onClick={() => dimFileRef.current?.click()}
+          disabled={importing}
+          className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          title="Upload a CSV with dimensions, country of origin, and brand to finish enriching SKUs"
+        >
+          {importing
+            ? importProgress
+              ? `Importing… ${importProgress.done.toLocaleString()} / ${importProgress.total.toLocaleString()}`
+              : "Importing…"
+            : "Import CSV"}
+        </button>
         <button
           onClick={() => void runConvert()}
           disabled={submitting || resolution.matched.length === 0}
@@ -470,6 +715,28 @@ export function ConvertByGtin({ items }: Props) {
             : `Convert ${resolution.matched.length.toLocaleString()} to WFS`}
         </button>
       </div>
+
+      {importResult && (
+        <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-2">
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <span>Received: {importResult.received.toLocaleString()}</span>
+            <span className="text-status-healthy">Updated: {importResult.updated.toLocaleString()}</span>
+            <span className="text-muted-foreground">Skipped: {importResult.skipped.toLocaleString()}</span>
+            <span className="text-status-critical">Errors: {importResult.errors.length.toLocaleString()}</span>
+          </div>
+          {importResult.errors.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-status-critical">Show errors</summary>
+              <ul className="mt-1 max-h-48 overflow-y-auto space-y-0.5 font-mono">
+                {importResult.errors.slice(0, 500).map((e, i) => (
+                  <li key={i}><span className="text-primary">{e.sku}</span> — {e.reason}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+
 
       {progress && (
         <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-2">
