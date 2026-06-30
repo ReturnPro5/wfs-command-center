@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  enrichCatalogStep,
   resolveIdentifiers,
   submitWfsConversion,
   type CatalogIdentifier,
