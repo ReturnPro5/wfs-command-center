@@ -1866,7 +1866,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
     const missing = tokens.filter((t) => !cachedByToken.has(t));
     const fetchedRows: any[] = [];
     const notFound: string[] = [];
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 12;
     let cursor = 0;
     await Promise.all(
       Array.from({ length: Math.min(CONCURRENCY, missing.length) }, async () => {
