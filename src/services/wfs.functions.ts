@@ -2691,6 +2691,23 @@ export interface WfsConversionFailedItem {
   sku: string;
   status: string;
   reason: string;
+  rawErrors?: unknown[];
+}
+
+export interface WfsGroupDiagnostics {
+  groupIndex: number;
+  itemCount: number;
+  skus: string[];
+  feedType: string;
+  specVersion: string;
+  header: Record<string, unknown>;
+  requestBody: unknown;
+  specValidation?: { unknownKeys: string[]; missingRequired: string[] } | null;
+  submitResponse?: unknown;
+  submitError?: { message: string; rateLimited: boolean } | null;
+  feedId: string | null;
+  feedStatus?: unknown;
+  timedOut: boolean;
 }
 
 export interface WfsConversionRunResult {
@@ -2705,6 +2722,8 @@ export interface WfsConversionRunResult {
   failedItems: WfsConversionFailedItem[];
   ingestionErrors: Array<{ sku?: string; type?: string; description?: string }>;
   timedOut: boolean;
+  specVersion: string;
+  groups: WfsGroupDiagnostics[];
 }
 
 function genRequestId(): string {
