@@ -2497,7 +2497,14 @@ async function getCatalogPageInternal(
         publishedStatus: nextPublished ?? "PUBLISHED",
       };
     }
-    throw err;
+    // Walmart scroll IDs expire after a short retention window. Restart the
+    // current bucket from a fresh scroll cursor rather than failing the run.
+    if (msg.includes("EXPIRED_SCROLL_ID") && cursorIn) {
+      console.warn(`[catalog] scroll id expired for ${lifecycle}/${publishedStatus}; restarting bucket`);
+      raw = await walmartApi.getItems("*", lifecycle, publishedStatus);
+    } else {
+      throw err;
+    }
   }
   const page = (raw as any)?.payload ?? raw;
   const list: any[] =
