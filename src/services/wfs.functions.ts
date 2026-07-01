@@ -2688,9 +2688,10 @@ function normalizeWfsCondition(raw: unknown): string {
 // will likely return per-SKU validation errors for missing fields — those
 // are surfaced verbatim back to the UI so you know what to fix.
 // JSON-serializable blob type used for Walmart request/response payloads
-// surfaced to the UI. Kept as an alias so server-fn type inference stays happy
-// (the RPC boundary rejects bare `unknown`).
-export type WfsJsonBlob = Record<string, unknown>;
+// surfaced to the UI. Uses `any` because the server-fn RPC boundary infers
+// object-index types that reject bare `unknown`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type WfsJsonBlob = Record<string, any>;
 
 export interface WfsConversionFailedItem {
   sku: string;
