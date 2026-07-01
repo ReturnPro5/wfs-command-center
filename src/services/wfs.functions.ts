@@ -2687,10 +2687,33 @@ function normalizeWfsCondition(raw: unknown): string {
 // only stores SKU + identifiers + product name, so first-pass submissions
 // will likely return per-SKU validation errors for missing fields — those
 // are surfaced verbatim back to the UI so you know what to fix.
+// JSON-serializable blob type used for Walmart request/response payloads
+// surfaced to the UI. Uses `any` because the server-fn RPC boundary infers
+// object-index types that reject bare `unknown`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type WfsJsonBlob = Record<string, any>;
+
 export interface WfsConversionFailedItem {
   sku: string;
   status: string;
   reason: string;
+  rawErrors?: WfsJsonBlob[];
+}
+
+export interface WfsGroupDiagnostics {
+  groupIndex: number;
+  itemCount: number;
+  skus: string[];
+  feedType: string;
+  specVersion: string;
+  header: WfsJsonBlob;
+  requestBody: WfsJsonBlob;
+  specValidation: { unknownKeys: string[]; missingRequired: string[] } | null;
+  submitResponse: WfsJsonBlob | null;
+  submitError: { message: string; rateLimited: boolean } | null;
+  feedId: string | null;
+  feedStatus: WfsJsonBlob | null;
+  timedOut: boolean;
 }
 
 export interface WfsConversionRunResult {
@@ -2705,6 +2728,8 @@ export interface WfsConversionRunResult {
   failedItems: WfsConversionFailedItem[];
   ingestionErrors: Array<{ sku?: string; type?: string; description?: string }>;
   timedOut: boolean;
+  specVersion: string;
+  groups: WfsGroupDiagnostics[];
 }
 
 function genRequestId(): string {
@@ -3227,6 +3252,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     if (insErr) throw new Error(`conversion log insert failed: ${insErr.message}`);
     const runId = (runRow as any).id as string;
 
+    const SPEC_VERSION =
+      process.env.WALMART_OMNI_SPEC_VERSION ?? "5.0.20260205-21_38_48-api";
+
     if (readyToSubmitCount === 0) {
       return {
         runId,
@@ -3240,8 +3268,11 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         failedItems: preflightFailed,
         ingestionErrors: [],
         timedOut: false,
+        specVersion: SPEC_VERSION,
+        groups: [],
       };
     }
+
 
     // Build a single OMNI_WFS feed (Spec 5.0). The 5.0 envelope no longer
     // carries `subCategory` on the header, so one feed can mix product types.
@@ -3258,8 +3289,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     let anyTimedOut = false;
     let lastStatus = "submitted";
 
-    const SPEC_VERSION =
-      process.env.WALMART_OMNI_SPEC_VERSION ?? "5.0.20260205-21_38_48-api";
+
+
 
     try {
       const items = ready;
@@ -3335,12 +3366,38 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         SupplierItem: supplierItems,
       };
 
+      const header = {
+        businessUnit: "WALMART_US",
+        locale: "en",
+        version: SPEC_VERSION,
+      };
+
+      const groupDiag: WfsGroupDiagnostics = {
+        groupIndex: 0,
+        itemCount: items.length,
+        skus: items.map((it) => it.r.sku),
+        feedType,
+        specVersion: SPEC_VERSION,
+        header,
+        requestBody: feedBody as unknown as WfsJsonBlob,
+        specValidation: null,
+        submitResponse: null,
+        submitError: null,
+        feedId: null,
+        feedStatus: null,
+        timedOut: false,
+      };
+      const groups: WfsGroupDiagnostics[] = [groupDiag];
+      // sku -> list of raw ingestion error objects (surfaced per SKU in UI)
+      const perSkuRawErrors = new Map<string, WfsJsonBlob[]>();
+
       let skipSubmit = false;
       if (specIndex) {
         const { unknownKeys, missingRequired } = validatePayloadAgainstSpec(
           feedBody,
           specIndex
         );
+        groupDiag.specValidation = { unknownKeys, missingRequired };
         if (unknownKeys.length > 0 || missingRequired.length > 0) {
           const reasonParts: string[] = [];
           if (unknownKeys.length > 0)
@@ -3364,9 +3421,11 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       if (!skipSubmit) {
         try {
           submitRes = await walmartApi.submitFeed(feedType, feedBody);
+          groupDiag.submitResponse = (submitRes ?? null) as WfsJsonBlob | null;
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           const rateLimited = /\b429\b|REQUEST_THRESHOLD|threshold|rate limit/i.test(msg);
+          groupDiag.submitError = { message: msg, rateLimited };
           for (const it of items) {
             allFailed.push({
               sku: it.r.sku,
@@ -3387,6 +3446,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         feedId = submitRes?.feedId ?? submitRes?.payload?.feedId ?? null;
         if (feedId) allFeedIds.push(feedId);
         allSubmits.push({ feedId, raw: submitRes });
+        groupDiag.feedId = feedId;
       }
 
 
@@ -3414,6 +3474,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
       }
       if (timedOut) anyTimedOut = true;
       allStatuses.push({ feedId, status: statusPayload, timedOut });
+      groupDiag.feedStatus = (statusPayload ?? null) as WfsJsonBlob | null;
+      groupDiag.timedOut = timedOut;
       lastStatus = statusPayload?.feedStatus ?? submitRes?.feedStatus ?? lastStatus;
 
       aggReceived += Number(statusPayload?.itemsReceived ?? 0);
@@ -3446,6 +3508,10 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
           d?.ingestionErrors?.ingestionError ?? d?.ingestionErrors ?? [];
         const errList = Array.isArray(ingErrs) ? ingErrs : [];
 
+        if (sku && errList.length > 0) {
+          perSkuRawErrors.set(sku, errList as WfsJsonBlob[]);
+        }
+
         if (ingestionStatus === "PROCESSED" || ingestionStatus === "SUCCESS") {
           if (sku) allSuccess.push(sku);
         } else if (sku) {
@@ -3458,6 +3524,7 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               firstErr?.errorDescription ??
               firstErr?.message ??
               "No error description provided",
+            rawErrors: errList as WfsJsonBlob[],
           });
         }
 
@@ -3486,8 +3553,17 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
               sku: it.r.sku,
               status: "FEED_ERROR",
               reason: desc,
+              rawErrors: topErrs as WfsJsonBlob[],
             });
           }
+        }
+      }
+
+      // Backfill rawErrors on any previously pushed failure whose SKU has raw
+      // ingestion errors we discovered later.
+      for (const f of allFailed) {
+        if (!f.rawErrors && perSkuRawErrors.has(f.sku)) {
+          f.rawErrors = perSkuRawErrors.get(f.sku);
         }
       }
 
@@ -3504,6 +3580,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
             failedItems: allFailed as unknown as Record<string, unknown>[],
             preflightFailed: preflightFailed as unknown as Record<string, unknown>[],
             timedOut: anyTimedOut,
+            specVersion: SPEC_VERSION,
+            groups: groups as unknown as Record<string, unknown>[],
           } as any,
         })
         .eq("id", runId);
@@ -3523,6 +3601,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         failedItems: [...preflightFailed, ...allFailed],
         ingestionErrors: allErrs,
         timedOut: anyTimedOut,
+        specVersion: SPEC_VERSION,
+        groups,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
