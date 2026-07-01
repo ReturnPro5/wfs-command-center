@@ -3252,6 +3252,9 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     if (insErr) throw new Error(`conversion log insert failed: ${insErr.message}`);
     const runId = (runRow as any).id as string;
 
+    const SPEC_VERSION =
+      process.env.WALMART_OMNI_SPEC_VERSION ?? "5.0.20260205-21_38_48-api";
+
     if (readyToSubmitCount === 0) {
       return {
         runId,
@@ -3265,8 +3268,11 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
         failedItems: preflightFailed,
         ingestionErrors: [],
         timedOut: false,
+        specVersion: SPEC_VERSION,
+        groups: [],
       };
     }
+
 
     // Build a single OMNI_WFS feed (Spec 5.0). The 5.0 envelope no longer
     // carries `subCategory` on the header, so one feed can mix product types.
