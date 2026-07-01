@@ -2687,11 +2687,16 @@ function normalizeWfsCondition(raw: unknown): string {
 // only stores SKU + identifiers + product name, so first-pass submissions
 // will likely return per-SKU validation errors for missing fields — those
 // are surfaced verbatim back to the UI so you know what to fix.
+// JSON-serializable blob type used for Walmart request/response payloads
+// surfaced to the UI. Kept as an alias so server-fn type inference stays happy
+// (the RPC boundary rejects bare `unknown`).
+export type WfsJsonBlob = Record<string, unknown>;
+
 export interface WfsConversionFailedItem {
   sku: string;
   status: string;
   reason: string;
-  rawErrors?: unknown[];
+  rawErrors?: WfsJsonBlob[];
 }
 
 export interface WfsGroupDiagnostics {
@@ -2700,13 +2705,13 @@ export interface WfsGroupDiagnostics {
   skus: string[];
   feedType: string;
   specVersion: string;
-  header: Record<string, unknown>;
-  requestBody: unknown;
-  specValidation?: { unknownKeys: string[]; missingRequired: string[] } | null;
-  submitResponse?: unknown;
-  submitError?: { message: string; rateLimited: boolean } | null;
+  header: WfsJsonBlob;
+  requestBody: WfsJsonBlob;
+  specValidation: { unknownKeys: string[]; missingRequired: string[] } | null;
+  submitResponse: WfsJsonBlob | null;
+  submitError: { message: string; rateLimited: boolean } | null;
   feedId: string | null;
-  feedStatus?: unknown;
+  feedStatus: WfsJsonBlob | null;
   timedOut: boolean;
 }
 
