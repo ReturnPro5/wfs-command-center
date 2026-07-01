@@ -1,40 +1,50 @@
-# Move WFS Convert to current Omni Spec 5.0
+# Show full WFS payload + Walmart diagnostics in Bulk Convert
 
 ## Goal
-Stop hand-coding the OMNI_WFS payload against an old snapshot. Make the payload builder read Walmart's live JSON schema (Omni Spec 5.0, currently build `5.0.20260205-21_38_48`) and only send fields/enums that the current spec actually defines for each product type.
+After a Bulk Convert to WFS run, let you see (and download) the exact JSON payload we sent Walmart per group, plus every scrap of diagnostic info Walmart returns — so you can hand it to Walmart support when a SKU fails.
 
-## Step 1 — Pull the current spec and diff it (read-only, no code yet)
-- For OMNI_WFS overall, and for the top product types we've actually been submitting (taken from `wfs_conversion_runs` history), call `walmartApi.getFeedSpec("OMNI_WFS", <productType>)`.
-- Save each schema + the spec build version Walmart returns.
-- Produce a diff report at `docs/wfs-spec-diff-<date>.md` listing, per productType:
-  - **Required attributes** in 5.0 that we never send
-  - **Field names** we send that are not in the 5.0 schema (today these are silently swallowed by `WALMART_REJECTED_OMNI_WFS_KEYS`)
-  - **Enum values** where our defaults (`"No Warning Applicable"`, `"None"`, `"Does Not Contain a Battery"`, `"US - United States"`, `"fbw"`, etc.) no longer match 5.0
-  - **Renames** (e.g. Prop 65 key name per category, country-of-origin field, battery field)
-- Deliver the report to you before any code change. You approve → step 2.
+## What changes
 
-## Step 2 — Make the payload builder spec-driven
-Refactor `submitWfsConversion` in `src/services/wfs.functions.ts`:
-- Load the spec once per (feedType, productType) at run start, cache for the run, **record the spec build version on the `wfs_conversion_runs` row**.
-- Replace the hand-rolled `Visible` / `Orderable` / `TradeItem` object literals with a builder that:
-  - Walks `Visible.<ProductType>.required[]` from the live schema and fills each one from our known sources (image, brand, price, Prop 65 text = `"None"`, country of origin, dimensions, weight, etc.) **using the live field name from the schema** — no more hard-coded keys like `prop65WarningText` or `californiaPropWarningText`.
-  - Drops anything not present in the live schema, so we can delete `WALMART_REJECTED_OMNI_WFS_KEYS` entirely.
-  - Validates enum values against the schema and substitutes the closest allowed value (or fails preflight with a clear "value X not in enum [...]" message).
-- Header stays `version: "1.4"`, `sellingChannel: "fbw"`, `processMode: "REPLACE"`, `subset: "EXTERNAL"` unless the spec diff says otherwise.
+### 1. `src/services/wfs.functions.ts` — `submitWfsConversion`
+Capture per-group diagnostics we already build but throw away, and return them.
 
-## Step 3 — Surface the version in the UI and run log
-- Show "Spec: OMNI_WFS · build 5.0.<…> · header v1.4" in the Bulk Convert tab footer.
-- Add `spec_version` column to `wfs_conversion_runs` (migration with GRANTs) so we can answer "which spec build did this feed go out against?" later.
+For each group we submit, record:
+- `groupIndex`, `productType` / `subCategory` bucket, `itemCount`, `skus[]`
+- `feedType` (`OMNI_WFS`), spec `version`, header (`businessUnit`, `locale`, `version`)
+- `requestBody` — the exact `feedBody` JSON posted to `/v3/feeds?feedType=OMNI_WFS`
+- `specValidation` — `{ unknownKeys, missingRequired }` from the local validator
+- `submitResponse` — raw response from `walmartApi.submitFeed` (feedId, feedStatus, any warnings)
+- `feedStatus` — the final `getFeedStatus(feedId, includeDetails=true)` payload (feedStatus, itemsReceived/Succeeded/Failed, `ingestionErrors`, full `itemDetails.itemIngestionStatus[]` with per-SKU errors)
+- `submitError` — message + rate-limited flag if the POST threw
 
-## Step 4 — Lock in freshness
-- Add a small server function `refreshOmniWfsSpec()` that refetches the spec for the cached product types and surfaces in the UI when Walmart rolls a new build. No automatic re-deploy needed; we just see the badge change and re-run the diff.
+Persist the same array on `wfs_conversion_runs.response.groups` (already a JSON column) alongside the existing `submits` / `statuses` so past runs stay inspectable.
+
+Extend the returned `WfsConversionRunResult` with:
+- `groups: WfsGroupDiagnostics[]` — the array above
+- `specVersion: string` (the Omni spec build string we sent in the header)
+
+No change to what we actually submit — this is purely surfacing what we already build.
+
+### 2. `src/components/BulkConvertWfs.tsx` — results panel
+Under the existing Feed ID / Status / Submitted summary, add a **Diagnostics** section:
+
+- Per group, a collapsible card showing: group #, product-type bucket, item count, feedId, feedStatus, itemsReceived/Succeeded/Failed, spec version.
+- Two buttons per group:
+  - **Copy payload JSON** (clipboard)
+  - **Download payload** — `wfs-payload-<runId>-g<index>.json` containing `{ header, requestBody, submitResponse, feedStatus, specValidation }`
+- One top-level button **Download full run bundle** — a single JSON with `{ runId, feedIds, specVersion, groups, preflightFailed, failedItems, successSkus }` — this is what you'd attach to a Walmart ticket.
+- Per-SKU failure rows already listed under "Failed / deferred" get an extra "View error detail" toggle showing the raw `ingestionError` object (`type`, `field`, `description`, `errorInfo`) from that SKU's `itemIngestionStatus` entry.
+
+### 3. Type file — `src/types/wfs.ts` (or wherever `WfsConversionRunResult` lives)
+Add `WfsGroupDiagnostics` and extend the result type. No DB migration needed — `response` is already `jsonb`.
 
 ## Out of scope
-- Changing `feedType` (stays `OMNI_WFS`).
-- Changing header `version: "1.4"`.
-- Rewriting category bucketing / subCategory aliases.
+- Changing the payload shape or spec version.
+- Changing preflight rules.
+- New DB columns (existing `response` jsonb absorbs it).
 
-## Deliverable order
-1. Spec diff report (read-only, you review).
-2. Refactor + migration + UI badge (one build pass).
-3. Optional spec-refresh button.
+## Technical notes
+- `feedBody` is currently a local variable inside the per-group loop in `submitWfsConversion`. Assign it to a `groupDiag.requestBody` at build time before `walmartApi.submitFeed` is called, so we capture it even when submit throws.
+- Redact nothing — this payload contains only product data (SKU, GTIN, dims, brand, image URL), no credentials.
+- `walmartApi.submitFeed` and `getFeedStatus` responses are already captured in `allSubmits` / `allStatuses`; the new `groups[]` is just a per-group re-shape of those plus `requestBody`.
+- Downloaded JSON files use `application/json` blob + `URL.createObjectURL`, same pattern as the existing CSV download in `downloadCsv`.
