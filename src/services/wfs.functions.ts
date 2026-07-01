@@ -3949,15 +3949,12 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const batchSize = data.batchSize ?? 200;
     await getWalmartAccessToken();
 
-    // Targeted Convert-by-GTIN enrichment can be as small as one SKU. Pulling
-    // the full Walmart Item Report for that path can exceed the worker memory
-    // limit before we even fetch the SKU, so only use the report for broader
-    // catalog enrichment runs.
-    const shouldUseItemReport = !data.onlySkus || data.onlySkus.length === 0;
-    const reportMapPromise = shouldUseItemReport
-      ? getItemReportFulfillmentMap()
-      : Promise.resolve(new Map<string, any>());
-
+    // The Walmart Item Report can be hundreds of MB — loading it inside the
+    // enrichment worker crashed the sandbox with "Worker exceeded memory
+    // limit." Sync already writes report-derived fields (brand, image, price,
+    // productType) into catalog_items, so enrichment now relies on the
+    // per-SKU /v3/items/{sku} call plus whatever is already cached, and
+    // never fetches the report here.
     let query = supabaseAdmin
       .from("catalog_items")
       .select("sku, brand, manufacturer, short_description, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit")
@@ -3975,12 +3972,8 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const rowList = (rows ?? []) as any[];
     const skus = rowList.map((r: any) => r.sku);
 
-    let reportMap = new Map<string, any>();
-    try {
-      reportMap = await reportMapPromise;
-    } catch (e) {
-      console.warn("[WFS:enrich] item report fetch failed, continuing without it:", e instanceof Error ? e.message : String(e));
-    }
+    const reportMap = new Map<string, any>();
+
 
     let enriched = 0;
     let partial = 0;
