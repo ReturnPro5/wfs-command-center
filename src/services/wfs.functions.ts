@@ -3289,8 +3289,8 @@ export const submitWfsConversion = createServerFn({ method: "POST" })
     let anyTimedOut = false;
     let lastStatus = "submitted";
 
-    const SPEC_VERSION =
-      process.env.WALMART_OMNI_SPEC_VERSION ?? "5.0.20260205-21_38_48-api";
+
+
 
     try {
       const items = ready;
