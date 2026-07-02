@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+  backfillItemReportEnrichment,
   enrichCatalogStep,
   getEnrichmentOverview,
   importDimensions,
@@ -450,6 +451,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   // ─── Catalog enrichment runner ────────────────────────
   const [enrichOverview, setEnrichOverview] = useState<EnrichmentOverview | null>(null);
   const [enriching, setEnriching] = useState(false);
+  const [reportBackfilling, setReportBackfilling] = useState(false);
   const [enrichProgress, setEnrichProgress] = useState<string>("");
   const stopEnrichRef = useRef(false);
 
