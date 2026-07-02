@@ -400,49 +400,34 @@ function CatalogPage() {
               <div className="w-full sm:w-96">
                 <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
               </div>
-              <Select value={conditionFilter} onValueChange={(v) => setConditionFilter(v)}>
-                <SelectTrigger className="w-full sm:w-64 bg-secondary border-border">
-                  <SelectValue placeholder="Item condition" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All conditions ({items.length.toLocaleString()})</SelectItem>
-                  {conditionCounts.map(([cond, n]) => (
-                    <SelectItem key={cond} value={cond}>
-                      {cond} ({n.toLocaleString()})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={fulfillmentFilter} onValueChange={(v) => setFulfillmentFilter(v)}>
-                <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
-                  <SelectValue placeholder="Fulfillment" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All fulfillment ({items.length.toLocaleString()})</SelectItem>
-                  {fulfillmentCounts.map(([f, n]) => (
-                    <SelectItem key={f} value={f}>
-                      {f} ({n.toLocaleString()})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={sdsFilter} onValueChange={(v) => setSdsFilter(v as SdsFilter)}>
-                <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
-                  <SelectValue placeholder="SDS requirement" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All SDS statuses ({items.length.toLocaleString()})</SelectItem>
-                  <SelectItem value="Likely required">
-                    Likely required ({(sdsCounts.get("Likely required") ?? 0).toLocaleString()})
-                  </SelectItem>
-                  <SelectItem value="Possibly required">
-                    Possibly required ({(sdsCounts.get("Possibly required") ?? 0).toLocaleString()})
-                  </SelectItem>
-                  <SelectItem value="Not required">
-                    Not required ({(sdsCounts.get("Not required") ?? 0).toLocaleString()})
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="w-full sm:w-64">
+                <CategoryFilter
+                  options={conditionCounts.map(([label, count]) => ({ label, count }))}
+                  selected={selectedConditions}
+                  onChange={setSelectedConditions}
+                  placeholder={`All conditions (${items.length.toLocaleString()})`}
+                />
+              </div>
+              <div className="w-full sm:w-72">
+                <CategoryFilter
+                  options={fulfillmentCounts.map(([label, count]) => ({ label, count }))}
+                  selected={selectedFulfillments}
+                  onChange={setSelectedFulfillments}
+                  placeholder={`All fulfillment (${items.length.toLocaleString()})`}
+                />
+              </div>
+              <div className="w-full sm:w-72">
+                <CategoryFilter
+                  options={[
+                    { label: "Likely required", count: sdsCounts.get("Likely required") ?? 0 },
+                    { label: "Possibly required", count: sdsCounts.get("Possibly required") ?? 0 },
+                    { label: "Not required", count: sdsCounts.get("Not required") ?? 0 },
+                  ]}
+                  selected={selectedSds}
+                  onChange={setSelectedSds}
+                  placeholder={`All SDS statuses (${items.length.toLocaleString()})`}
+                />
+              </div>
               <div className="w-full sm:w-72">
                 <CategoryFilter
                   options={categoryCounts.map(([label, count]) => ({ label, count }))}
