@@ -4217,3 +4217,100 @@ export const getEnrichmentOverview = createServerFn({ method: "GET" }).handler(
     };
   }
 );
+
+export interface BackfillItemReportEnrichmentResult {
+  reportRows: number;
+  scanned: number;
+  updated: number;
+  promoted: number;
+  partial: number;
+  missingReportRows: number;
+}
+
+// Fast backfill for the fields Walmart only exposes reliably in the Item
+// Report (mainImageUrl, price, productType, brand). Per-SKU /v3/items calls do
+// not return mainImageUrl for many listings, so rows can sit at "partial" even
+// after dimensions + country of origin were imported. This pass streams the
+// latest Item Report and merges those report fields into existing rows.
+export const backfillItemReportEnrichment = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        batchSize: z.number().int().min(100).max(2000).optional(),
+      })
+      .parse(data ?? {})
+  )
+  .handler(async ({ data }): Promise<BackfillItemReportEnrichmentResult> => {
+    await getWalmartAccessToken();
+    const reportMap = await getItemReportFulfillmentMap();
+    const batchSize = data.batchSize ?? 1000;
+
+    let from = 0;
+    let scanned = 0;
+    let updated = 0;
+    let promoted = 0;
+    let partial = 0;
+    let missingReportRows = 0;
+    const now = new Date().toISOString();
+
+    while (true) {
+      const { data: rows, error } = await supabaseAdmin
+        .from("catalog_items")
+        .select("sku, brand, manufacturer, short_description, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit")
+        .order("sku", { ascending: true })
+        .range(from, from + batchSize - 1);
+      if (error) throw new Error(`item report backfill read failed: ${error.message}`);
+
+      const rowList = (rows ?? []) as any[];
+      if (rowList.length === 0) break;
+      scanned += rowList.length;
+
+      for (const row of rowList) {
+        const sku = String(row?.sku ?? "");
+        const report = reportMap.get(sku);
+        if (!report) {
+          missingReportRows++;
+          continue;
+        }
+
+        const patch: Record<string, unknown> = {};
+        if (!hasEnrichedValue(row.brand) && report.brand) patch.brand = report.brand;
+        if (!hasEnrichedValue(row.main_image_url) && report.mainImageUrl) patch.main_image_url = report.mainImageUrl;
+        if (!hasEnrichedValue(row.price) && hasEnrichedValue(report.price)) patch.price = report.price;
+        if (!hasEnrichedValue(row.currency) && report.currency) patch.currency = report.currency;
+        if (!hasEnrichedValue(row.product_type) && report.productType) patch.product_type = report.productType;
+        if (!hasEnrichedValue(row.category) && report.productType) patch.category = report.productType;
+
+        if (Object.keys(patch).length === 0) continue;
+
+        const fields = existingEnrichedFields({ ...row, ...patch });
+        const status = classifyEnrichment(fields);
+        const { error: updateErr } = await supabaseAdmin
+          .from("catalog_items")
+          .update({
+            ...patch,
+            enrichment_status: status,
+            enrichment_error: null,
+            enriched_at: now,
+            last_synced_at: now,
+          })
+          .eq("sku", sku);
+        if (updateErr) throw new Error(`item report backfill update failed for ${sku}: ${updateErr.message}`);
+        updated++;
+        if (status === "enriched") promoted++;
+        else partial++;
+      }
+
+      if (rowList.length < batchSize) break;
+      from += batchSize;
+    }
+
+    return {
+      reportRows: reportMap.size,
+      scanned,
+      updated,
+      promoted,
+      partial,
+      missingReportRows,
+    };
+  });
