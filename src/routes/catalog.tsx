@@ -219,9 +219,9 @@ function CatalogPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return itemsWithSds.filter((r) => {
-      if (conditionFilter !== "ALL" && (r.condition ?? "") !== conditionFilter) return false;
-      if (fulfillmentFilter !== "ALL" && (r.fulfillment ?? "Unknown") !== fulfillmentFilter) return false;
-      if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
+      if (selectedConditions.length > 0 && !selectedConditions.includes(r.condition?.trim() || "Unknown")) return false;
+      if (selectedFulfillments.length > 0 && !selectedFulfillments.includes(r.fulfillment ?? "Unknown")) return false;
+      if (selectedSds.length > 0 && !selectedSds.includes(r.sds.requirement)) return false;
       if (selectedCategories.length > 0) {
         const cat = (r.category ?? "").trim() || "Uncategorized";
         if (!selectedCategories.includes(cat)) return false;
@@ -234,7 +234,7 @@ function CatalogPage() {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [itemsWithSds, search, conditionFilter, fulfillmentFilter, sdsFilter, selectedCategories]);
+  }, [itemsWithSds, search, selectedConditions, selectedFulfillments, selectedSds, selectedCategories]);
 
   const conditionCounts = useMemo(() => {
     const c = new Map<string, number>();
