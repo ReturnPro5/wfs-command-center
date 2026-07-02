@@ -604,20 +604,35 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     let totalEnriched = 0;
     let totalPartial = 0;
     let totalFailed = 0;
+    let consecutiveErrors = 0;
     try {
       while (!stopEnrichRef.current) {
-        const res = await enrichCatalogStep({
-          data: { batchSize: 200, afterSku: cursor ?? undefined, reenrich },
-        });
-        totalProcessed += res.processed;
-        totalEnriched += res.enriched;
-        totalPartial += res.partial;
-        totalFailed += res.failed;
-        cursor = res.nextAfterSku;
-        setEnrichProgress(
-          `Processed ${totalProcessed} · enriched ${totalEnriched} · partial ${totalPartial} · errors ${totalFailed} · remaining ${res.remaining}`
-        );
-        if (res.done || res.processed === 0) break;
+        try {
+          const res = await enrichCatalogStep({
+            data: { batchSize: 50, afterSku: cursor ?? undefined, reenrich },
+          });
+          consecutiveErrors = 0;
+          totalProcessed += res.processed;
+          totalEnriched += res.enriched;
+          totalPartial += res.partial;
+          totalFailed += res.failed;
+          cursor = res.nextAfterSku;
+          setEnrichProgress(
+            `Processed ${totalProcessed} · enriched ${totalEnriched} · partial ${totalPartial} · errors ${totalFailed} · remaining ${res.remaining}`
+          );
+          if (res.done || res.processed === 0) break;
+        } catch (batchErr) {
+          // Transient worker crashes (502 / memory) shouldn't abort the whole
+          // run — pause briefly and retry the same cursor. Give up after
+          // several consecutive failures so we don't loop forever.
+          consecutiveErrors++;
+          const msg = batchErr instanceof Error ? batchErr.message : String(batchErr);
+          setEnrichProgress(
+            `Retrying after error (${consecutiveErrors}/5): ${msg.slice(0, 120)}`
+          );
+          if (consecutiveErrors >= 5) throw batchErr;
+          await new Promise((r) => setTimeout(r, 2000 * consecutiveErrors));
+        }
       }
       toast.success(
         `Enrichment complete — enriched ${totalEnriched}, partial ${totalPartial}, errors ${totalFailed}`
@@ -631,6 +646,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       void refreshOverview();
     }
   }
+
 
   return (
     <div className="space-y-4">

@@ -4030,7 +4030,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
       .parse(data ?? {})
   )
   .handler(async ({ data }): Promise<EnrichCatalogResult> => {
-    const batchSize = data.batchSize ?? 200;
+    const batchSize = data.batchSize ?? 50;
     await getWalmartAccessToken();
 
     // The Walmart Item Report can be hundreds of MB — loading it inside the
@@ -4044,6 +4044,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
       .select("sku, brand, manufacturer, short_description, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit")
       .order("sku", { ascending: true })
       .limit(batchSize);
+
     if (data.onlySkus && data.onlySkus.length > 0) {
       query = query.in("sku", data.onlySkus);
     } else if (!data.reenrich) {
@@ -4065,7 +4066,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const details: Array<{ sku: string; status: string; missing: string[]; error?: string }> = [];
     const now = new Date().toISOString();
 
-    const CONCURRENCY = 16;
+    const CONCURRENCY = 4;
     let idx = 0;
     async function worker() {
       while (idx < skus.length) {
@@ -4087,7 +4088,9 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
               enrichment_status: status,
               enrichment_error: null,
               enriched_at: now,
-              enrichment_raw: raw as any,
+              // Intentionally do NOT persist enrichment_raw — the raw item
+              // JSON from Walmart is large and blows the worker memory
+              // budget when multiplied across a batch of concurrent SKUs.
               last_synced_at: now,
             })
             .eq("sku", sku);
@@ -4097,6 +4100,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
             console.warn(`[WFS:enrich] update failed sku=${sku}: ${uErr.message}`);
             continue;
           }
+
           if (status === "enriched") enriched++;
           else partial++;
           details.push({ sku, status, missing });
