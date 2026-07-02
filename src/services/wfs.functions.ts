@@ -2470,10 +2470,14 @@ async function getCatalogPageInternal(
   publishedStatus: string = "PUBLISHED"
 ): Promise<CatalogPage> {
   await getWalmartAccessToken();
-  const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
-    getWfsFulfilledSkuSet(),
-    getItemReportFulfillmentMap(),
-  ]);
+  // NOTE: We deliberately do NOT load getItemReportFulfillmentMap() here.
+  // The Walmart Item Report is hundreds of MB and loading it inside each
+  // syncCatalogStep invocation caused the Cloudflare Worker to exceed its
+  // memory limit (502s mid-sync). The report is only used for enrichment
+  // (brand/image/price/productType), which happens later via per-SKU
+  // /v3/items calls. Fulfillment classification only needs wfsSkuSet.
+  const wfsSkuSet = await getWfsFulfilledSkuSet();
+  const itemReportFulfillment = new Map<string, ItemReportRow>();
   const cursor = cursorIn ?? "*";
 
   const pubIdx = PUBLISHED_STATUS_ORDER.indexOf(publishedStatus);
