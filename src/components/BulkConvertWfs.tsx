@@ -692,14 +692,21 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           <div className="flex gap-2">
             <button
               onClick={() => runEnrichment(false)}
-              disabled={enriching}
+              disabled={enriching || reportBackfilling}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
               {enriching ? "Enriching…" : "Enrich pending"}
             </button>
             <button
+              onClick={() => runItemReportBackfill()}
+              disabled={enriching || reportBackfilling}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
+            >
+              {reportBackfilling ? "Backfilling…" : "Backfill Item Report fields"}
+            </button>
+            <button
               onClick={() => runEnrichment(true)}
-              disabled={enriching}
+              disabled={enriching || reportBackfilling}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
             >
               Re-enrich all
