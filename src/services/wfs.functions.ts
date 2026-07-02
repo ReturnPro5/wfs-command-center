@@ -4066,7 +4066,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const details: Array<{ sku: string; status: string; missing: string[]; error?: string }> = [];
     const now = new Date().toISOString();
 
-    const CONCURRENCY = 16;
+    const CONCURRENCY = 4;
     let idx = 0;
     async function worker() {
       while (idx < skus.length) {
@@ -4088,7 +4088,9 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
               enrichment_status: status,
               enrichment_error: null,
               enriched_at: now,
-              enrichment_raw: raw as any,
+              // Intentionally do NOT persist enrichment_raw — the raw item
+              // JSON from Walmart is large and blows the worker memory
+              // budget when multiplied across a batch of concurrent SKUs.
               last_synced_at: now,
             })
             .eq("sku", sku);
@@ -4098,6 +4100,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
             console.warn(`[WFS:enrich] update failed sku=${sku}: ${uErr.message}`);
             continue;
           }
+
           if (status === "enriched") enriched++;
           else partial++;
           details.push({ sku, status, missing });
