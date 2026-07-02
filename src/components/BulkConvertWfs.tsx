@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+  backfillItemReportEnrichment,
   enrichCatalogStep,
   getEnrichmentOverview,
   importDimensions,
@@ -450,6 +451,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
   // ─── Catalog enrichment runner ────────────────────────
   const [enrichOverview, setEnrichOverview] = useState<EnrichmentOverview | null>(null);
   const [enriching, setEnriching] = useState(false);
+  const [reportBackfilling, setReportBackfilling] = useState(false);
   const [enrichProgress, setEnrichProgress] = useState<string>("");
   const stopEnrichRef = useRef(false);
 
@@ -647,6 +649,25 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     }
   }
 
+  async function runItemReportBackfill() {
+    setReportBackfilling(true);
+    setEnrichProgress("Loading the latest Walmart Item Report to fill image, price, product type, and brand…");
+    try {
+      const res = await backfillItemReportEnrichment({ data: { batchSize: 1000 } });
+      setEnrichProgress(
+        `Item Report backfill scanned ${res.scanned.toLocaleString()} SKUs · updated ${res.updated.toLocaleString()} · promoted ${res.promoted.toLocaleString()} to enriched · report rows ${res.reportRows.toLocaleString()}`
+      );
+      toast.success(`Item Report backfill promoted ${res.promoted.toLocaleString()} SKUs to enriched`);
+      void refreshOverview();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setEnrichProgress(`Item Report backfill failed: ${msg}`);
+      toast.error(`Item Report backfill failed: ${msg}`);
+    } finally {
+      setReportBackfilling(false);
+    }
+  }
+
 
   return (
     <div className="space-y-4">
@@ -671,14 +692,21 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
           <div className="flex gap-2">
             <button
               onClick={() => runEnrichment(false)}
-              disabled={enriching}
+              disabled={enriching || reportBackfilling}
               className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
             >
               {enriching ? "Enriching…" : "Enrich pending"}
             </button>
             <button
+              onClick={() => runItemReportBackfill()}
+              disabled={enriching || reportBackfilling}
+              className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
+            >
+              {reportBackfilling ? "Backfilling…" : "Backfill Item Report fields"}
+            </button>
+            <button
               onClick={() => runEnrichment(true)}
-              disabled={enriching}
+              disabled={enriching || reportBackfilling}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/30 disabled:opacity-50"
             >
               Re-enrich all
