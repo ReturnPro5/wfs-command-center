@@ -96,9 +96,9 @@ function CatalogPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
-  const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("ALL");
-  const [sdsFilter, setSdsFilter] = useState<SdsFilter>("ALL");
+  const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
+  const [selectedFulfillments, setSelectedFulfillments] = useState<string[]>([]);
+  const [selectedSds, setSelectedSds] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{ lifecycle: string; publishedStatus: string } | null>(null);
@@ -219,9 +219,9 @@ function CatalogPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return itemsWithSds.filter((r) => {
-      if (conditionFilter !== "ALL" && (r.condition ?? "") !== conditionFilter) return false;
-      if (fulfillmentFilter !== "ALL" && (r.fulfillment ?? "Unknown") !== fulfillmentFilter) return false;
-      if (sdsFilter !== "ALL" && r.sds.requirement !== sdsFilter) return false;
+      if (selectedConditions.length > 0 && !selectedConditions.includes(r.condition?.trim() || "Unknown")) return false;
+      if (selectedFulfillments.length > 0 && !selectedFulfillments.includes(r.fulfillment ?? "Unknown")) return false;
+      if (selectedSds.length > 0 && !selectedSds.includes(r.sds.requirement)) return false;
       if (selectedCategories.length > 0) {
         const cat = (r.category ?? "").trim() || "Uncategorized";
         if (!selectedCategories.includes(cat)) return false;
@@ -234,7 +234,7 @@ function CatalogPage() {
         r.upc.toLowerCase().includes(q)
       );
     });
-  }, [itemsWithSds, search, conditionFilter, fulfillmentFilter, sdsFilter, selectedCategories]);
+  }, [itemsWithSds, search, selectedConditions, selectedFulfillments, selectedSds, selectedCategories]);
 
   const conditionCounts = useMemo(() => {
     const c = new Map<string, number>();
@@ -400,49 +400,34 @@ function CatalogPage() {
               <div className="w-full sm:w-96">
                 <SearchFilter value={search} onChange={setSearch} placeholder="Search SKU, GTIN, UPC, or name..." />
               </div>
-              <Select value={conditionFilter} onValueChange={(v) => setConditionFilter(v)}>
-                <SelectTrigger className="w-full sm:w-64 bg-secondary border-border">
-                  <SelectValue placeholder="Item condition" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All conditions ({items.length.toLocaleString()})</SelectItem>
-                  {conditionCounts.map(([cond, n]) => (
-                    <SelectItem key={cond} value={cond}>
-                      {cond} ({n.toLocaleString()})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={fulfillmentFilter} onValueChange={(v) => setFulfillmentFilter(v)}>
-                <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
-                  <SelectValue placeholder="Fulfillment" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All fulfillment ({items.length.toLocaleString()})</SelectItem>
-                  {fulfillmentCounts.map(([f, n]) => (
-                    <SelectItem key={f} value={f}>
-                      {f} ({n.toLocaleString()})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={sdsFilter} onValueChange={(v) => setSdsFilter(v as SdsFilter)}>
-                <SelectTrigger className="w-full sm:w-72 bg-secondary border-border">
-                  <SelectValue placeholder="SDS requirement" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All SDS statuses ({items.length.toLocaleString()})</SelectItem>
-                  <SelectItem value="Likely required">
-                    Likely required ({(sdsCounts.get("Likely required") ?? 0).toLocaleString()})
-                  </SelectItem>
-                  <SelectItem value="Possibly required">
-                    Possibly required ({(sdsCounts.get("Possibly required") ?? 0).toLocaleString()})
-                  </SelectItem>
-                  <SelectItem value="Not required">
-                    Not required ({(sdsCounts.get("Not required") ?? 0).toLocaleString()})
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="w-full sm:w-64">
+                <CategoryFilter
+                  options={conditionCounts.map(([label, count]) => ({ label, count }))}
+                  selected={selectedConditions}
+                  onChange={setSelectedConditions}
+                  placeholder={`All conditions (${items.length.toLocaleString()})`}
+                />
+              </div>
+              <div className="w-full sm:w-72">
+                <CategoryFilter
+                  options={fulfillmentCounts.map(([label, count]) => ({ label, count }))}
+                  selected={selectedFulfillments}
+                  onChange={setSelectedFulfillments}
+                  placeholder={`All fulfillment (${items.length.toLocaleString()})`}
+                />
+              </div>
+              <div className="w-full sm:w-72">
+                <CategoryFilter
+                  options={[
+                    { label: "Likely required", count: sdsCounts.get("Likely required") ?? 0 },
+                    { label: "Possibly required", count: sdsCounts.get("Possibly required") ?? 0 },
+                    { label: "Not required", count: sdsCounts.get("Not required") ?? 0 },
+                  ]}
+                  selected={selectedSds}
+                  onChange={setSelectedSds}
+                  placeholder={`All SDS statuses (${items.length.toLocaleString()})`}
+                />
+              </div>
               <div className="w-full sm:w-72">
                 <CategoryFilter
                   options={categoryCounts.map(([label, count]) => ({ label, count }))}
