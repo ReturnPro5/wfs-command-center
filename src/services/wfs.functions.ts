@@ -4048,7 +4048,10 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     if (data.onlySkus && data.onlySkus.length > 0) {
       query = query.in("sku", data.onlySkus);
     } else if (!data.reenrich) {
-      query = query.in("enrichment_status", ["pending", "error"]);
+      // "Enrich pending" must also revisit partial rows. Imports often fill
+      // dimensions/country first, leaving a SKU marked partial until the next
+      // API pass fills price/product type/image from Walmart.
+      query = query.in("enrichment_status", ["pending", "partial", "error"]);
     }
     if (data.afterSku) query = query.gt("sku", data.afterSku);
 
@@ -4127,7 +4130,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const { count: pendingCount } = await supabaseAdmin
       .from("catalog_items")
       .select("sku", { count: "exact", head: true })
-      .in("enrichment_status", ["pending", "error"]);
+      .in("enrichment_status", ["pending", "partial", "error"]);
 
     const nextAfterSku = skus.length > 0 ? skus[skus.length - 1] : null;
     const done = skus.length < batchSize;
