@@ -96,9 +96,9 @@ function CatalogPage() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [conditionFilter, setConditionFilter] = useState<ConditionFilter>("ALL");
-  const [fulfillmentFilter, setFulfillmentFilter] = useState<FulfillmentFilter>("ALL");
-  const [sdsFilter, setSdsFilter] = useState<SdsFilter>("ALL");
+  const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
+  const [selectedFulfillments, setSelectedFulfillments] = useState<string[]>([]);
+  const [selectedSds, setSelectedSds] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [estimatedTotal, setEstimatedTotal] = useState<number | null>(null);
   const [activeFilters, setActiveFilters] = useState<{ lifecycle: string; publishedStatus: string } | null>(null);
