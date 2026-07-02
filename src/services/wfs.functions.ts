@@ -4030,7 +4030,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
       .parse(data ?? {})
   )
   .handler(async ({ data }): Promise<EnrichCatalogResult> => {
-    const batchSize = data.batchSize ?? 200;
+    const batchSize = data.batchSize ?? 50;
     await getWalmartAccessToken();
 
     // The Walmart Item Report can be hundreds of MB — loading it inside the
@@ -4044,6 +4044,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
       .select("sku, brand, manufacturer, short_description, main_image_url, price, currency, product_type, category, sub_category, country_of_origin, shipping_weight, shipping_weight_unit, shipping_length, shipping_width, shipping_height, shipping_dim_unit")
       .order("sku", { ascending: true })
       .limit(batchSize);
+
     if (data.onlySkus && data.onlySkus.length > 0) {
       query = query.in("sku", data.onlySkus);
     } else if (!data.reenrich) {
