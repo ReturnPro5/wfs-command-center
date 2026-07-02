@@ -649,6 +649,25 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
     }
   }
 
+  async function runItemReportBackfill() {
+    setReportBackfilling(true);
+    setEnrichProgress("Loading the latest Walmart Item Report to fill image, price, product type, and brand…");
+    try {
+      const res = await backfillItemReportEnrichment({ data: { batchSize: 1000 } });
+      setEnrichProgress(
+        `Item Report backfill scanned ${res.scanned.toLocaleString()} SKUs · updated ${res.updated.toLocaleString()} · promoted ${res.promoted.toLocaleString()} to enriched · report rows ${res.reportRows.toLocaleString()}`
+      );
+      toast.success(`Item Report backfill promoted ${res.promoted.toLocaleString()} SKUs to enriched`);
+      void refreshOverview();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setEnrichProgress(`Item Report backfill failed: ${msg}`);
+      toast.error(`Item Report backfill failed: ${msg}`);
+    } finally {
+      setReportBackfilling(false);
+    }
+  }
+
 
   return (
     <div className="space-y-4">
