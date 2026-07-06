@@ -1406,7 +1406,9 @@ function indexHeader(header: string[]): Record<keyof typeof COL_ALIASES, number>
   return {
     sku: findCol(header, COL_ALIASES.sku),
     fulfillment: findCol(header, COL_ALIASES.fulfillment),
+    wfsEligibility: findCol(header, COL_ALIASES.wfsEligibility),
     brand: findCol(header, COL_ALIASES.brand),
+
     image: findCol(header, COL_ALIASES.image),
     price: findCol(header, COL_ALIASES.price),
     currency: findCol(header, COL_ALIASES.currency),
