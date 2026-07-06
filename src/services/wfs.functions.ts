@@ -1134,6 +1134,7 @@ export interface CatalogIdentifier {
 // sync — the user only needs to supply dimensions + country of origin.
 export interface ItemReportRow {
   fulfillment: FulfillmentType | null;
+  wfsEligible?: boolean | null;
   brand?: string;
   mainImageUrl?: string;
   price?: number | null;
@@ -1143,6 +1144,7 @@ export interface ItemReportRow {
   gtin?: string;
   upc?: string;
 }
+
 
 
 
@@ -1157,7 +1159,16 @@ function deriveFulfillment(
   itemReportRows?: Map<string, ItemReportRow>
 ): FulfillmentType {
   const sku = String(it?.sku ?? it?.SKU ?? it?.mart_sku ?? "");
-  const reported = sku ? itemReportRows?.get(sku)?.fulfillment : undefined;
+  const report = sku ? itemReportRows?.get(sku) : undefined;
+  const reported = report?.fulfillment;
+  const reportEligible = report?.wfsEligible === true;
+
+  // If report says the item is seller-fulfilled but ALSO flags WFS-eligibility,
+  // upgrade the label. Walmart's Item Report stores these in separate columns
+  // (fulfillmenttype vs wfseligibility) so we must combine them.
+  if (reported === "Seller Fulfilled" && reportEligible) {
+    return "Seller Fulfilled (WFS Eligible)";
+  }
   if (reported) return reported;
 
 
@@ -1186,7 +1197,7 @@ function deriveFulfillment(
   const isTruthy = (v: unknown) =>
     v === true ||
     ["true", "yes", "y", "eligible", "enabled", "active"].includes(String(v).toLowerCase());
-  const wfsEligible = eligibilityCandidates.some(isTruthy);
+  const wfsEligible = eligibilityCandidates.some(isTruthy) || reportEligible;
   const wfsEligibilityProvided = eligibilityCandidates.some((v) => v !== undefined && v !== null && v !== "");
 
   if (sku && wfsSkuSet?.has(sku)) return "Walmart Fulfilled";
@@ -1196,6 +1207,7 @@ function deriveFulfillment(
   if (ship || wfsEligibilityProvided) return "Seller Fulfilled";
   return "Unknown";
 }
+
 
 async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
   const inventory = await fetchAllInventory();
@@ -1294,7 +1306,10 @@ function detectDelimiter(text: string): string {
 const COL_ALIASES = {
   sku: ["sku", "sellersku", "merchantsku"],
   fulfillment: [
-    "fulfillmenttype", "fulfillment", "wfsstatus", "wfseligibility", "shippingprogramtype",
+    "fulfillmenttype", "fulfillment", "shippingprogramtype",
+  ],
+  wfsEligibility: [
+    "wfseligibility", "wfseligible", "wfsstatus", "iswfseligible",
   ],
   brand: ["brand", "brandname"],
   image: ["productimageurl", "primaryimageurl", "imageurl", "mainimageurl", "productimage"],
@@ -1305,6 +1320,7 @@ const COL_ALIASES = {
   gtin: ["gtin"],
   upc: ["upc", "productid"],
 } as const;
+
 
 const REPORT_DETAIL_FIELDS: Array<keyof ItemReportRow> = [
   "brand",
@@ -1320,6 +1336,11 @@ function mergeReportRows(base: ItemReportRow | undefined, next: ItemReportRow): 
   if (!base) return next;
   const merged: ItemReportRow = { ...base };
   if (!merged.fulfillment && next.fulfillment) merged.fulfillment = next.fulfillment;
+  if ((merged.wfsEligible === undefined || merged.wfsEligible === null) && next.wfsEligible != null) {
+    merged.wfsEligible = next.wfsEligible;
+  } else if (next.wfsEligible === true) {
+    merged.wfsEligible = true;
+  }
   for (const field of REPORT_DETAIL_FIELDS) {
     if ((merged[field] === undefined || merged[field] === null || merged[field] === "") && next[field] != null && next[field] !== "") {
       (merged as any)[field] = next[field];
@@ -1327,6 +1348,7 @@ function mergeReportRows(base: ItemReportRow | undefined, next: ItemReportRow): 
   }
   return merged;
 }
+
 
 function getItemImageUrl(it: any, report?: ItemReportRow): string | undefined {
   return String(
@@ -1363,8 +1385,16 @@ function buildReportRow(
   if (!sku) return null;
   const priceRaw = idx.price >= 0 ? row[idx.price]?.replace(/[^0-9.\-]/g, "") : "";
   const price = priceRaw ? Number(priceRaw) : null;
+  const eligibilityRaw = idx.wfsEligibility >= 0 ? row[idx.wfsEligibility]?.trim() : "";
+  const eligibilityNorm = (eligibilityRaw ?? "").toLowerCase();
+  const wfsEligible = eligibilityNorm
+    ? ["true", "yes", "y", "1", "eligible", "enabled", "active", "wfs eligible", "wfseligible"].some((k) =>
+        eligibilityNorm.includes(k),
+      )
+    : null;
   const data: ItemReportRow = {
     fulfillment: idx.fulfillment >= 0 ? normalizeFulfillmentType(row[idx.fulfillment]) : null,
+    wfsEligible,
     brand: idx.brand >= 0 ? row[idx.brand]?.trim() || undefined : undefined,
     mainImageUrl: idx.image >= 0 ? row[idx.image]?.trim() || undefined : undefined,
     price: Number.isFinite(price as number) ? (price as number) : null,
@@ -1377,11 +1407,14 @@ function buildReportRow(
   return { sku, data };
 }
 
+
 function indexHeader(header: string[]): Record<keyof typeof COL_ALIASES, number> {
   return {
     sku: findCol(header, COL_ALIASES.sku),
     fulfillment: findCol(header, COL_ALIASES.fulfillment),
+    wfsEligibility: findCol(header, COL_ALIASES.wfsEligibility),
     brand: findCol(header, COL_ALIASES.brand),
+
     image: findCol(header, COL_ALIASES.image),
     price: findCol(header, COL_ALIASES.price),
     currency: findCol(header, COL_ALIASES.currency),
