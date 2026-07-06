@@ -438,6 +438,16 @@ function CatalogPage() {
                 ? `Reclassifying… ${reclassifyProgress?.processed.toLocaleString() ?? 0} · +${reclassifyProgress?.promotedToEligible.toLocaleString() ?? 0} eligible`
                 : "Reclassify fulfillment from Item Report"}
             </button>
+            <button
+              onClick={() => void runBackfillPrices()}
+              disabled={syncing || loading || backfilling || reclassifying || pricing}
+              title="Stream the Walmart Item Report once and write listing prices onto every cached SKU. Going forward, the per-SKU enrichment pass also fills missing prices."
+              className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            >
+              {pricing
+                ? `Getting prices… ${pricingProgress?.processed.toLocaleString() ?? 0} · ${pricingProgress?.updated.toLocaleString() ?? 0} updated`
+                : "Get prices"}
+            </button>
             {items.length > 0 && (
               <button
                 onClick={() => downloadCsv(filtered)}
