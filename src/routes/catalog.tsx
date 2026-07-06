@@ -218,6 +218,46 @@ function CatalogPage() {
     }
   }
 
+  async function runReclassifyFromReport() {
+    if (reclassifying || syncing || backfilling) return;
+    setReclassifying(true);
+    setError(null);
+    setReclassifyProgress({ processed: 0, updated: 0, promotedToEligible: 0 });
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    let totalPromoted = 0;
+    try {
+      let afterSku: string | undefined = undefined;
+      // eslint-disable-next-line no-constant-condition
+      while (!cancelledRef.current) {
+        const res = await reclassifyFulfillmentFromReport({ data: { batchSize: 500, afterSku } });
+        totalProcessed += res.processed;
+        totalUpdated += res.updated;
+        totalPromoted += res.promotedToEligible;
+        setReclassifyProgress({
+          processed: totalProcessed,
+          updated: totalUpdated,
+          promotedToEligible: totalPromoted,
+        });
+        if (res.done || res.processed === 0) break;
+        afterSku = res.nextAfterSku ?? afterSku;
+      }
+      const fresh = await getCachedCatalog();
+      if (cancelledRef.current) return;
+      setItems(fresh.items);
+      setState(fresh.state);
+      toast.success(
+        `Reclassify complete — ${totalPromoted.toLocaleString()} promoted to WFS Eligible (${totalUpdated.toLocaleString()} total updates across ${totalProcessed.toLocaleString()} SKUs)`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(`Reclassify failed: ${msg}`);
+    } finally {
+      setReclassifying(false);
+    }
+  }
+
   // Augment items with derived SDS classification (memoized once per items change).
   const itemsWithSds = useMemo(
     () => items.map((r) => ({ ...r, sds: classifySds(r.productName) })),
