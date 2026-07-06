@@ -2587,6 +2587,90 @@ export const reclassifyFulfillmentFromReport = createServerFn({ method: "POST" }
     };
   });
 
+export interface BackfillPricesFromReportResult {
+  processed: number;
+  updated: number;
+  filledMissing: number;
+  changedExisting: number;
+  reportRows: number;
+  done: boolean;
+  nextAfterSku: string | null;
+}
+
+// Streams the Walmart Item Report once and writes `price` / `currency` onto
+// every catalog_items row whose price differs (or is missing). The regular
+// sync deliberately skips the Item Report to avoid Cloudflare Worker OOMs,
+// so this is the way to hydrate prices for the cached catalog. Going
+// forward the per-SKU enrichment pass also fills price from the report.
+export const backfillPricesFromReport = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        batchSize: z.number().int().min(100).max(2000).optional(),
+        afterSku: z.string().optional(),
+        overwrite: z.boolean().optional(),
+      })
+      .parse(data ?? {})
+  )
+  .handler(async ({ data }): Promise<BackfillPricesFromReportResult> => {
+    const batchSize = data.batchSize ?? 500;
+    const overwrite = data.overwrite ?? true;
+    await getWalmartAccessToken();
+    const reportMap = await getItemReportFulfillmentMap();
+
+    let query = supabaseAdmin
+      .from("catalog_items")
+      .select("sku, price, currency")
+      .order("sku", { ascending: true })
+      .limit(batchSize);
+    if (data.afterSku) query = query.gt("sku", data.afterSku);
+
+    const { data: rows, error } = await query;
+    if (error) throw new Error(`price backfill read failed: ${error.message}`);
+    const list = (rows ?? []) as Array<{ sku: string; price: number | null; currency: string | null }>;
+
+    let updated = 0;
+    let filledMissing = 0;
+    let changedExisting = 0;
+    const now = new Date().toISOString();
+
+    for (const row of list) {
+      const sku = String(row.sku ?? "");
+      if (!sku) continue;
+      const report = reportMap.get(sku);
+      const nextPrice = report?.price ?? null;
+      if (nextPrice == null || !Number.isFinite(nextPrice)) continue;
+
+      const hadPrice = row.price != null && Number(row.price) > 0;
+      if (!overwrite && hadPrice) continue;
+      if (hadPrice && Number(row.price) === nextPrice) continue;
+
+      const nextCurrency = (report?.currency ?? row.currency ?? "USD") || "USD";
+      const { error: uErr } = await supabaseAdmin
+        .from("catalog_items")
+        .update({ price: nextPrice, currency: nextCurrency, last_synced_at: now })
+        .eq("sku", sku);
+      if (uErr) {
+        console.warn(`[WFS:prices] update failed sku=${sku}: ${uErr.message}`);
+        continue;
+      }
+      updated++;
+      if (!hadPrice) filledMissing++;
+      else changedExisting++;
+    }
+
+    const nextAfterSku = list.length > 0 ? list[list.length - 1].sku : null;
+    return {
+      processed: list.length,
+      updated,
+      filledMissing,
+      changedExisting,
+      reportRows: reportMap.size,
+      done: list.length < batchSize,
+      nextAfterSku,
+    };
+  });
+
 
 
 // Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper.
