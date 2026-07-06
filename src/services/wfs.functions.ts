@@ -1123,6 +1123,7 @@ export interface CatalogIdentifier {
   brand?: string;
   mainImageUrl?: string;
   price?: number | null;
+  currency?: string;
   productType?: string;
   enrichmentStatus?: "pending" | "partial" | "enriched" | "error" | string;
   enrichedAt?: string | null;
@@ -1785,7 +1786,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
     while (true) {
       const { data, error } = await supabaseAdmin
         .from("catalog_items")
-        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, product_type, enrichment_status, enriched_at")
+        .select("sku, product_name, gtin, upc, lifecycle, condition, published_status, fulfillment, category, brand, main_image_url, price, currency, product_type, enrichment_status, enriched_at")
         .order("sku", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error(`catalog cache read failed: ${error.message}`);
@@ -1809,6 +1810,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           brand: r.brand ?? "",
           mainImageUrl: r.main_image_url ?? "",
           price: typeof r.price === "number" ? r.price : r.price == null ? null : Number(r.price),
+          currency: r.currency ?? "USD",
           productType: r.product_type ?? "",
           enrichmentStatus: r.enrichment_status ?? "pending",
           enrichedAt: r.enriched_at ?? null,
