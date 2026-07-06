@@ -1123,6 +1123,7 @@ export interface CatalogIdentifier {
   brand?: string;
   mainImageUrl?: string;
   price?: number | null;
+  currency?: string;
   productType?: string;
   enrichmentStatus?: "pending" | "partial" | "enriched" | "error" | string;
   enrichedAt?: string | null;
