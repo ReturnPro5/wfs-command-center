@@ -1379,8 +1379,16 @@ function buildReportRow(
   if (!sku) return null;
   const priceRaw = idx.price >= 0 ? row[idx.price]?.replace(/[^0-9.\-]/g, "") : "";
   const price = priceRaw ? Number(priceRaw) : null;
+  const eligibilityRaw = idx.wfsEligibility >= 0 ? row[idx.wfsEligibility]?.trim() : "";
+  const eligibilityNorm = (eligibilityRaw ?? "").toLowerCase();
+  const wfsEligible = eligibilityNorm
+    ? ["true", "yes", "y", "1", "eligible", "enabled", "active", "wfs eligible", "wfseligible"].some((k) =>
+        eligibilityNorm.includes(k),
+      )
+    : null;
   const data: ItemReportRow = {
     fulfillment: idx.fulfillment >= 0 ? normalizeFulfillmentType(row[idx.fulfillment]) : null,
+    wfsEligible,
     brand: idx.brand >= 0 ? row[idx.brand]?.trim() || undefined : undefined,
     mainImageUrl: idx.image >= 0 ? row[idx.image]?.trim() || undefined : undefined,
     price: Number.isFinite(price as number) ? (price as number) : null,
@@ -1392,6 +1400,7 @@ function buildReportRow(
   };
   return { sku, data };
 }
+
 
 function indexHeader(header: string[]): Record<keyof typeof COL_ALIASES, number> {
   return {
