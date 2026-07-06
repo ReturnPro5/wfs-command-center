@@ -1464,7 +1464,8 @@ function createFulfillmentReportParser() {
       } else if (shiftedHeader) {
         console.warn(`[WFS:catalog] item report header has duplicate names; CSV may be malformed. header=${header.slice(0, 55).join("|")}`);
       } else {
-        console.log(`[WFS:catalog] item report cols sku=${idx.sku} fulfillment=${idx.fulfillment} brand=${idx.brand} image=${idx.image} price=${idx.price} productType=${idx.productType}`);
+        console.log(`[WFS:catalog] item report cols sku=${idx.sku} fulfillment=${idx.fulfillment} brand=${idx.brand} image=${idx.image} price=${idx.price}(${header[idx.price] ?? "?"}) currency=${idx.currency}(${header[idx.currency] ?? "?"}) productType=${idx.productType}`);
+        console.log(`[WFS:catalog] item report header sample: ${header.slice(0, 60).map((h, i) => `${i}:${h}`).join(" | ")}`);
       }
       return;
     }
