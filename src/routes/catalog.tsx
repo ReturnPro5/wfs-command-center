@@ -103,6 +103,12 @@ function CatalogPage() {
     updated: number;
     promotedToEligible: number;
   } | null>(null);
+  const [pricing, setPricing] = useState(false);
+  const [pricingProgress, setPricingProgress] = useState<{
+    processed: number;
+    updated: number;
+    filledMissing: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
