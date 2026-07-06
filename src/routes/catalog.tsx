@@ -382,6 +382,16 @@ function CatalogPage() {
                   : `Backfill Unknown fulfillment (${unknownCount.toLocaleString()})`}
               </button>
             )}
+            <button
+              onClick={() => void runReclassifyFromReport()}
+              disabled={syncing || loading || backfilling || reclassifying}
+              title="Stream the Walmart Item Report once and upgrade Seller Fulfilled rows that are WFS-eligible. The regular sync skips the report to avoid worker memory limits."
+              className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            >
+              {reclassifying
+                ? `Reclassifying… ${reclassifyProgress?.processed.toLocaleString() ?? 0} · +${reclassifyProgress?.promotedToEligible.toLocaleString() ?? 0} eligible`
+                : "Reclassify fulfillment from Item Report"}
+            </button>
             {items.length > 0 && (
               <button
                 onClick={() => downloadCsv(filtered)}
