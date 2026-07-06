@@ -1134,6 +1134,7 @@ export interface CatalogIdentifier {
 // sync — the user only needs to supply dimensions + country of origin.
 export interface ItemReportRow {
   fulfillment: FulfillmentType | null;
+  wfsEligible?: boolean | null;
   brand?: string;
   mainImageUrl?: string;
   price?: number | null;
@@ -1143,6 +1144,7 @@ export interface ItemReportRow {
   gtin?: string;
   upc?: string;
 }
+
 
 
 
