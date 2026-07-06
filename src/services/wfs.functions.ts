@@ -1306,7 +1306,10 @@ function detectDelimiter(text: string): string {
 const COL_ALIASES = {
   sku: ["sku", "sellersku", "merchantsku"],
   fulfillment: [
-    "fulfillmenttype", "fulfillment", "wfsstatus", "wfseligibility", "shippingprogramtype",
+    "fulfillmenttype", "fulfillment", "shippingprogramtype",
+  ],
+  wfsEligibility: [
+    "wfseligibility", "wfseligible", "wfsstatus", "iswfseligible",
   ],
   brand: ["brand", "brandname"],
   image: ["productimageurl", "primaryimageurl", "imageurl", "mainimageurl", "productimage"],
@@ -1317,6 +1320,7 @@ const COL_ALIASES = {
   gtin: ["gtin"],
   upc: ["upc", "productid"],
 } as const;
+
 
 const REPORT_DETAIL_FIELDS: Array<keyof ItemReportRow> = [
   "brand",
