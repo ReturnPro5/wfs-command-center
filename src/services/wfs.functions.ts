@@ -2495,6 +2495,100 @@ export const backfillUnknownFulfillment = createServerFn({ method: "POST" })
     };
   });
 
+// ─── Reclassify Fulfillment from Item Report ───────────────────────
+// The regular catalog sync intentionally skips loading the Walmart Item Report
+// (it's hundreds of MB and would OOM the Worker per-page). As a result,
+// fulfillment during sync is derived only from WFS inventory membership, so
+// items that are "Seller Fulfilled but WFS-eligible" get labeled plain
+// "Seller Fulfilled". This one-shot pass streams the Item Report once and
+// upgrades those rows to "Seller Fulfilled (WFS Eligible)".
+export interface ReclassifyFromReportResult {
+  processed: number;
+  updated: number;
+  promotedToEligible: number;
+  promotedToWalmart: number;
+  demotedFromEligible: number;
+  reportRows: number;
+  done: boolean;
+  nextAfterSku: string | null;
+}
+
+export const reclassifyFulfillmentFromReport = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) =>
+    z
+      .object({
+        batchSize: z.number().int().min(100).max(2000).optional(),
+        afterSku: z.string().optional(),
+      })
+      .parse(data ?? {})
+  )
+  .handler(async ({ data }): Promise<ReclassifyFromReportResult> => {
+    const batchSize = data.batchSize ?? 500;
+    await getWalmartAccessToken();
+    const [wfsSkuSet, reportMap] = await Promise.all([
+      getWfsFulfilledSkuSet(),
+      getItemReportFulfillmentMap(),
+    ]);
+
+    let query = supabaseAdmin
+      .from("catalog_items")
+      .select("sku, fulfillment")
+      .order("sku", { ascending: true })
+      .limit(batchSize);
+    if (data.afterSku) query = query.gt("sku", data.afterSku);
+
+    const { data: rows, error } = await query;
+    if (error) throw new Error(`reclassify read failed: ${error.message}`);
+    const list = (rows ?? []) as Array<{ sku: string; fulfillment: string | null }>;
+
+    let updated = 0;
+    let promotedToEligible = 0;
+    let promotedToWalmart = 0;
+    let demotedFromEligible = 0;
+    const now = new Date().toISOString();
+
+    for (const row of list) {
+      const sku = String(row.sku ?? "");
+      if (!sku) continue;
+      const report = reportMap.get(sku);
+      // Feed deriveFulfillment a minimal candidate — the report map + wfsSkuSet
+      // are what actually drive the decision.
+      const next = deriveFulfillment({ sku }, wfsSkuSet, reportMap);
+      if (next === "Unknown") continue;
+      if (next === row.fulfillment) continue;
+
+      const { error: uErr } = await supabaseAdmin
+        .from("catalog_items")
+        .update({ fulfillment: next, last_synced_at: now })
+        .eq("sku", sku);
+      if (uErr) {
+        console.warn(`[WFS:reclassify] update failed sku=${sku}: ${uErr.message}`);
+        continue;
+      }
+      updated++;
+      if (next === "Seller Fulfilled (WFS Eligible)") promotedToEligible++;
+      if (next === "Walmart Fulfilled" && row.fulfillment !== "Walmart Fulfilled") promotedToWalmart++;
+      if (row.fulfillment === "Seller Fulfilled (WFS Eligible)" && next !== "Seller Fulfilled (WFS Eligible)") {
+        demotedFromEligible++;
+      }
+      void report; // touch to satisfy the reader; deriveFulfillment already read it
+    }
+
+    const nextAfterSku = list.length > 0 ? list[list.length - 1].sku : null;
+    return {
+      processed: list.length,
+      updated,
+      promotedToEligible,
+      promotedToWalmart,
+      demotedFromEligible,
+      reportRows: reportMap.size,
+      done: list.length < batchSize,
+      nextAfterSku,
+    };
+  });
+
+
+
 // Internal helper that mirrors getCatalogPage handler logic without the server-fn wrapper.
 // Walks both lifecycleStatus AND publishedStatus so the full catalog is captured.
 async function getCatalogPageInternal(

@@ -11,9 +11,11 @@ import {
   getCachedCatalog,
   syncCatalogStep,
   backfillUnknownFulfillment,
+  reclassifyFulfillmentFromReport,
   type CatalogIdentifier,
   type CatalogSyncState,
 } from "@/services/wfs.functions";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { classifySds, type SdsRequirement } from "@/lib/sdsClassifier";
@@ -93,6 +95,12 @@ function CatalogPage() {
     processed: number;
     updated: number;
     remaining: number;
+  } | null>(null);
+  const [reclassifying, setReclassifying] = useState(false);
+  const [reclassifyProgress, setReclassifyProgress] = useState<{
+    processed: number;
+    updated: number;
+    promotedToEligible: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -210,6 +218,46 @@ function CatalogPage() {
     }
   }
 
+  async function runReclassifyFromReport() {
+    if (reclassifying || syncing || backfilling) return;
+    setReclassifying(true);
+    setError(null);
+    setReclassifyProgress({ processed: 0, updated: 0, promotedToEligible: 0 });
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    let totalPromoted = 0;
+    try {
+      let afterSku: string | undefined = undefined;
+      // eslint-disable-next-line no-constant-condition
+      while (!cancelledRef.current) {
+        const res = await reclassifyFulfillmentFromReport({ data: { batchSize: 500, afterSku } });
+        totalProcessed += res.processed;
+        totalUpdated += res.updated;
+        totalPromoted += res.promotedToEligible;
+        setReclassifyProgress({
+          processed: totalProcessed,
+          updated: totalUpdated,
+          promotedToEligible: totalPromoted,
+        });
+        if (res.done || res.processed === 0) break;
+        afterSku = res.nextAfterSku ?? afterSku;
+      }
+      const fresh = await getCachedCatalog();
+      if (cancelledRef.current) return;
+      setItems(fresh.items);
+      setState(fresh.state);
+      toast.success(
+        `Reclassify complete — ${totalPromoted.toLocaleString()} promoted to WFS Eligible (${totalUpdated.toLocaleString()} total updates across ${totalProcessed.toLocaleString()} SKUs)`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error(`Reclassify failed: ${msg}`);
+    } finally {
+      setReclassifying(false);
+    }
+  }
+
   // Augment items with derived SDS classification (memoized once per items change).
   const itemsWithSds = useMemo(
     () => items.map((r) => ({ ...r, sds: classifySds(r.productName) })),
@@ -309,14 +357,14 @@ function CatalogPage() {
           <div className="flex gap-2">
             <button
               onClick={() => void runSync(false)}
-              disabled={syncing || loading || backfilling}
+              disabled={syncing || loading || backfilling || reclassifying}
               className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
               {syncing ? "Syncing…" : "Sync now"}
             </button>
             <button
               onClick={() => void runSync(true)}
-              disabled={syncing || loading || backfilling}
+              disabled={syncing || loading || backfilling || reclassifying}
               title="Re-walk the entire catalog from scratch"
               className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
@@ -325,7 +373,7 @@ function CatalogPage() {
             {unknownCount > 0 && (
               <button
                 onClick={() => void runBackfillUnknown()}
-                disabled={syncing || loading || backfilling}
+                disabled={syncing || loading || backfilling || reclassifying}
                 title="Re-query Walmart only for items currently classified as Unknown fulfillment"
                 className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
               >
@@ -334,6 +382,16 @@ function CatalogPage() {
                   : `Backfill Unknown fulfillment (${unknownCount.toLocaleString()})`}
               </button>
             )}
+            <button
+              onClick={() => void runReclassifyFromReport()}
+              disabled={syncing || loading || backfilling || reclassifying}
+              title="Stream the Walmart Item Report once and upgrade Seller Fulfilled rows that are WFS-eligible. The regular sync skips the report to avoid worker memory limits."
+              className="rounded-md border border-border bg-secondary px-3 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50"
+            >
+              {reclassifying
+                ? `Reclassifying… ${reclassifyProgress?.processed.toLocaleString() ?? 0} · +${reclassifyProgress?.promotedToEligible.toLocaleString() ?? 0} eligible`
+                : "Reclassify fulfillment from Item Report"}
+            </button>
             {items.length > 0 && (
               <button
                 onClick={() => downloadCsv(filtered)}
