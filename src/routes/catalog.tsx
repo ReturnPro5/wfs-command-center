@@ -12,6 +12,7 @@ import {
   syncCatalogStep,
   backfillUnknownFulfillment,
   reclassifyFulfillmentFromReport,
+  backfillPricesFromReport,
   type CatalogIdentifier,
   type CatalogSyncState,
 } from "@/services/wfs.functions";
