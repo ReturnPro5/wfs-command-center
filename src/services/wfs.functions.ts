@@ -1336,6 +1336,11 @@ function mergeReportRows(base: ItemReportRow | undefined, next: ItemReportRow): 
   if (!base) return next;
   const merged: ItemReportRow = { ...base };
   if (!merged.fulfillment && next.fulfillment) merged.fulfillment = next.fulfillment;
+  if ((merged.wfsEligible === undefined || merged.wfsEligible === null) && next.wfsEligible != null) {
+    merged.wfsEligible = next.wfsEligible;
+  } else if (next.wfsEligible === true) {
+    merged.wfsEligible = true;
+  }
   for (const field of REPORT_DETAIL_FIELDS) {
     if ((merged[field] === undefined || merged[field] === null || merged[field] === "") && next[field] != null && next[field] !== "") {
       (merged as any)[field] = next[field];
@@ -1343,6 +1348,7 @@ function mergeReportRows(base: ItemReportRow | undefined, next: ItemReportRow): 
   }
   return merged;
 }
+
 
 function getItemImageUrl(it: any, report?: ItemReportRow): string | undefined {
   return String(
