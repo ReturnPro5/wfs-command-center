@@ -1159,7 +1159,16 @@ function deriveFulfillment(
   itemReportRows?: Map<string, ItemReportRow>
 ): FulfillmentType {
   const sku = String(it?.sku ?? it?.SKU ?? it?.mart_sku ?? "");
-  const reported = sku ? itemReportRows?.get(sku)?.fulfillment : undefined;
+  const report = sku ? itemReportRows?.get(sku) : undefined;
+  const reported = report?.fulfillment;
+  const reportEligible = report?.wfsEligible === true;
+
+  // If report says the item is seller-fulfilled but ALSO flags WFS-eligibility,
+  // upgrade the label. Walmart's Item Report stores these in separate columns
+  // (fulfillmenttype vs wfseligibility) so we must combine them.
+  if (reported === "Seller Fulfilled" && reportEligible) {
+    return "Seller Fulfilled (WFS Eligible)";
+  }
   if (reported) return reported;
 
 
@@ -1188,7 +1197,7 @@ function deriveFulfillment(
   const isTruthy = (v: unknown) =>
     v === true ||
     ["true", "yes", "y", "eligible", "enabled", "active"].includes(String(v).toLowerCase());
-  const wfsEligible = eligibilityCandidates.some(isTruthy);
+  const wfsEligible = eligibilityCandidates.some(isTruthy) || reportEligible;
   const wfsEligibilityProvided = eligibilityCandidates.some((v) => v !== undefined && v !== null && v !== "");
 
   if (sku && wfsSkuSet?.has(sku)) return "Walmart Fulfilled";
@@ -1198,6 +1207,7 @@ function deriveFulfillment(
   if (ship || wfsEligibilityProvided) return "Seller Fulfilled";
   return "Unknown";
 }
+
 
 async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
   const inventory = await fetchAllInventory();
