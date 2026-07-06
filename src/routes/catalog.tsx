@@ -11,9 +11,11 @@ import {
   getCachedCatalog,
   syncCatalogStep,
   backfillUnknownFulfillment,
+  reclassifyFulfillmentFromReport,
   type CatalogIdentifier,
   type CatalogSyncState,
 } from "@/services/wfs.functions";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { classifySds, type SdsRequirement } from "@/lib/sdsClassifier";
