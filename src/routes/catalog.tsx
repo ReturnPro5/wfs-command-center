@@ -96,6 +96,12 @@ function CatalogPage() {
     updated: number;
     remaining: number;
   } | null>(null);
+  const [reclassifying, setReclassifying] = useState(false);
+  const [reclassifyProgress, setReclassifyProgress] = useState<{
+    processed: number;
+    updated: number;
+    promotedToEligible: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedConditions, setSelectedConditions] = useState<string[]>([]);
