@@ -41,7 +41,7 @@ type FulfillmentFilter = "ALL" | string;
 type SdsFilter = "ALL" | SdsRequirement;
 
 function downloadCsv(rows: CatalogIdentifier[]) {
-  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment", "SDS Requirement", "SDS Reasons"];
+  const header = ["SKU", "Product Name", "GTIN", "UPC", "Fulfillment", "Price", "Currency", "SDS Requirement", "SDS Reasons"];
   const escape = (v: string) => `"${(v ?? "").replace(/"/g, '""')}"`;
   // Force Excel/Sheets to treat long numeric IDs as text (no scientific notation,
   // no truncation of leading zeros) by wrapping in ="..." formula syntax.
@@ -53,12 +53,17 @@ function downloadCsv(rows: CatalogIdentifier[]) {
     header.join(","),
     ...rows.map((r) => {
       const sds = classifySds(r.productName);
+      const hasPrice = typeof r.price === "number" && Number.isFinite(r.price);
+      const price = hasPrice ? (r.price as number).toFixed(2) : "";
+      const currency = hasPrice ? ((r as { currency?: string }).currency ?? "USD") : "";
       return [
         escape(r.sku),
         escape(r.productName),
         escapeId(r.gtin),
         escapeId(r.upc),
         escape(r.fulfillment ?? ""),
+        escape(price),
+        escape(currency),
         escape(sds.requirement),
         escape(sds.reasons.join("; ")),
       ].join(",");
