@@ -1809,6 +1809,7 @@ export const getCachedCatalog = createServerFn({ method: "GET" }).handler(
           brand: r.brand ?? "",
           mainImageUrl: r.main_image_url ?? "",
           price: typeof r.price === "number" ? r.price : r.price == null ? null : Number(r.price),
+          currency: r.currency ?? "USD",
           productType: r.product_type ?? "",
           enrichmentStatus: r.enrichment_status ?? "pending",
           enrichedAt: r.enriched_at ?? null,
