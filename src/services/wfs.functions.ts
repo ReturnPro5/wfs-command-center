@@ -4370,12 +4370,12 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     if (data.onlySkus && data.onlySkus.length > 0) {
       query = query.in("sku", data.onlySkus);
     } else if (!data.reenrich) {
-      // "Enrich pending" revisits pending + partial rows. SKUs already marked
-      // "error" (Walmart 404 for retired items) are permanent failures — do
-      // NOT retry them on every pass; the user must hit Re-enrich to force
-      // another attempt. Otherwise the same handful of 404s keep re-consuming
-      // batch slots and the loop appears to "not make progress".
-      query = query.in("enrichment_status", ["pending", "partial"]);
+      // "Enrich pending" targets ONLY pending rows. Partial rows are missing
+      // fields that /v3/items/{sku} doesn't return (dims, country of origin,
+      // etc.) — re-fetching them just leaves them partial and burns the
+      // batch. The Item Report backfill covers partials; Re-enrich forces
+      // a full sweep including partial + error.
+      query = query.eq("enrichment_status", "pending");
     }
     if (data.afterSku) query = query.gt("sku", data.afterSku);
 
