@@ -312,12 +312,12 @@ export async function createItemReportRequest(): Promise<any> {
     });
   }
   try {
-    // v6 is the report version that carries Primary Image URL for listings
-    // where /v3/items/{sku} only returns offer-level fields.
-    return await postItemReport("/v3/reports/reportRequests", "v6", false);
+    // Request the smallest useful ITEM report first. The full v6 report can be
+    // hundreds of MB and has been too large for the Worker runtime to buffer.
+    return await postItemReport("/v3/reports/reportRequests", "v4", true);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (/404|CONTENT_NOT_FOUND/i.test(msg)) return postItemReport("/v3/reports/requests", "v6", false);
+    if (/404|CONTENT_NOT_FOUND/i.test(msg)) return postItemReport("/v3/reports/requests", "v4", true);
     if (/reportVersion|version/i.test(msg)) return postItemReport("/v3/reports/reportRequests", null, true);
     if (/excludeColumns|column|filter|payload|body|400/i.test(msg)) {
       return postItemReport("/v3/reports/reportRequests", "v4", false);
@@ -349,15 +349,15 @@ export async function listItemReportRequests(): Promise<any> {
     return walmartFetch<any>(`/v3/reports/reportRequests?${params}`, { headers });
   }
   try {
-    return await list("v6");
+    return await list("v4");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/reportVersion|version|400/i.test(msg)) return list(null);
     if (/404|CONTENT_NOT_FOUND/i.test(msg)) {
-      const params = new URLSearchParams({ reportType: "ITEM", reportVersion: "v6" });
+      const params = new URLSearchParams({ reportType: "ITEM", reportVersion: "v4" });
       return walmartFetch<any>(`/v3/reports/requests?${params}`, { headers });
     }
-    return list("v4");
+    throw err;
   }
 }
 
@@ -379,6 +379,12 @@ export async function downloadReport(requestId: string): Promise<{ body: string;
 }
 
 export async function downloadReportFile(requestId: string): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const response = await downloadReportResponse(requestId);
+  const buffer = await response.arrayBuffer();
+  return { bytes: new Uint8Array(buffer), contentType: response.headers.get("content-type") ?? "" };
+}
+
+export async function downloadReportResponse(requestId: string): Promise<Response> {
   const response = await walmartFetchRaw(
     `/v3/reports/downloadReport?requestId=${encodeURIComponent(requestId)}`,
     { headers: { Accept: "application/json", "WM_MARKET": "us", "WM_GLOBAL_VERSION": "3.1" } },
@@ -387,8 +393,6 @@ export async function downloadReportFile(requestId: string): Promise<{ bytes: Ui
 
   // Step 1: if Walmart returns JSON with a downloadURL, follow it; otherwise the
   // response IS the file (zip/csv/tsv).
-  let buffer: ArrayBuffer;
-  let finalContentType = contentType;
   if (contentType.includes("json")) {
     const text = await response.text();
     let url: string | undefined;
@@ -399,16 +403,12 @@ export async function downloadReportFile(requestId: string): Promise<{ bytes: Ui
     if (typeof url === "string" && /^https?:\/\//i.test(url)) {
       const file = await fetch(url, { signal: AbortSignal.timeout(60_000) });
       if (!file.ok) throw new Error(`report file download failed [${file.status}]`);
-      buffer = await file.arrayBuffer();
-      finalContentType = file.headers.get("content-type") ?? "";
+      return file;
     } else {
-      return { bytes: new TextEncoder().encode(text), contentType };
+      return new Response(text, { headers: { "content-type": contentType || "application/json" } });
     }
-  } else {
-    buffer = await response.arrayBuffer();
   }
-
-  return { bytes: new Uint8Array(buffer), contentType: finalContentType };
+  return response;
 }
 
 
