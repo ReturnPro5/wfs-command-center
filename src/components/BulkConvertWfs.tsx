@@ -284,17 +284,24 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok
   );
 }
 
-export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
+export function BulkConvertWfs({
+  items,
+  onCatalogChanged,
+}: {
+  items: CatalogIdentifier[];
+  onCatalogChanged?: () => Promise<void> | void;
+}) {
   // SKUs successfully converted in this session drop off the list immediately
   // so we never resubmit them.
   const [convertedSkus, setConvertedSkus] = useState<Set<string>>(new Set());
 
-  // Only "Seller Fulfilled" Open Box items with SKUs ending in "ND" are eligible.
-  // Walmart Fulfilled, "Seller Fulfilled (WFS Eligible)", and Unknown are excluded entirely.
+  // Only seller-fulfilled Open Box items with SKUs ending in "ND" are eligible.
+  // Keep WFS-eligible seller rows visible after the Item Report reclassify pass.
   const eligibleAll: Row[] = useMemo(() => {
     return items
       .filter((r) => {
-        if ((r.fulfillment ?? "Unknown") !== "Seller Fulfilled") return false;
+        const fulfillment = r.fulfillment ?? "Unknown";
+        if (fulfillment !== "Seller Fulfilled" && fulfillment !== "Seller Fulfilled (WFS Eligible)") return false;
         if (convertedSkus.has(r.sku)) return false;
         if (!/ND$/i.test(r.sku)) return false;
         const cond = (r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
@@ -569,6 +576,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       toast.success(
         `Updated ${updated.toLocaleString()} SKUs · skipped ${skipped.toLocaleString()} · ${allErrors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
       );
+      await onCatalogChanged?.();
       void refreshOverview();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -658,6 +666,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         `Item Report backfill scanned ${res.scanned.toLocaleString()} SKUs · updated ${res.updated.toLocaleString()} · promoted ${res.promoted.toLocaleString()} to enriched · report rows ${res.reportRows.toLocaleString()}`
       );
       toast.success(`Item Report backfill promoted ${res.promoted.toLocaleString()} SKUs to enriched`);
+      await onCatalogChanged?.();
       void refreshOverview();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

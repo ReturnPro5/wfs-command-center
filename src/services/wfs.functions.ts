@@ -1218,7 +1218,7 @@ async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
 const FULFILLMENT_REPORT_CACHE_TTL_MS = 30 * 60 * 1000;
 let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, ItemReportRow>> } | null = null;
 
-let fulfillmentReportRequest: { ts: number; requestId: string } | null = null;
+let fulfillmentReportRequest: { ts: number; requestId: string; fresh: boolean } | null = null;
 
 function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
   const v = String(value ?? "").trim().toLowerCase();
@@ -1626,7 +1626,6 @@ function getReadyReportRequestId(payload: any): string | null {
 async function getItemReportFulfillmentMap(required = false, forceRefresh = false): Promise<Map<string, ItemReportRow>> {
   if (forceRefresh) {
     fulfillmentReportCache = null;
-    fulfillmentReportRequest = null;
   }
   if (!forceRefresh && fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
     return fulfillmentReportCache.promise;
@@ -1634,33 +1633,50 @@ async function getItemReportFulfillmentMap(required = false, forceRefresh = fals
 
   const promise = (async (): Promise<Map<string, ItemReportRow>> => {
     try {
-      if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
+      const requestExpired =
+        !fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS;
+      const needsFreshRequest = forceRefresh && fulfillmentReportRequest?.fresh !== true;
+      if (requestExpired || needsFreshRequest) {
         let requestId: string | null = null;
-        try {
-          requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
-        } catch (err) {
-          console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
+        let fresh = false;
+        if (!forceRefresh) {
+          try {
+            requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
+          } catch (err) {
+            console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
+          }
         }
         if (!requestId) {
           const request = await walmartApi.createItemReportRequest();
           requestId = getReportRequestId(request);
+          fresh = true;
         }
         if (!requestId) throw new Error(`missing requestId in item report response`);
-        fulfillmentReportRequest = { ts: Date.now(), requestId };
+        fulfillmentReportRequest = { ts: Date.now(), requestId, fresh };
       }
-      const requestId = fulfillmentReportRequest.requestId;
+      const requestId = fulfillmentReportRequest?.requestId;
+      if (!requestId) throw new Error("missing cached item report requestId");
 
-      const lastStatus = await walmartApi.getReportRequestStatus(requestId);
-      const rawStatus = String(
-        lastStatus?.status ??
-          lastStatus?.requestStatus ??
-          lastStatus?.payload?.status ??
-          lastStatus?.payload?.requestStatus ??
-          ""
-      ).toUpperCase();
-      if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
-      if (!/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) {
-        throw new Error(`item report is ${rawStatus || "not ready"}`);
+      const pollStarted = Date.now();
+      const maxPollMs = forceRefresh ? 90_000 : 0;
+      let rawStatus = "";
+      while (true) {
+        const lastStatus = await walmartApi.getReportRequestStatus(requestId);
+        rawStatus = String(
+          lastStatus?.status ??
+            lastStatus?.requestStatus ??
+            lastStatus?.payload?.status ??
+            lastStatus?.payload?.requestStatus ??
+            ""
+        ).toUpperCase();
+        if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
+        if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) break;
+        if (Date.now() - pollStarted >= maxPollMs) {
+          throw new Error(
+            `fresh item report is ${rawStatus || "not ready"}; Walmart is still preparing it. Try Backfill Item Report fields again in a minute.`
+          );
+        }
+        await new Promise((r) => setTimeout(r, 5_000));
       }
 
       const response = await walmartApi.downloadReportResponse(requestId);
@@ -1668,7 +1684,9 @@ async function getItemReportFulfillmentMap(required = false, forceRefresh = fals
       if (map.size === 0) throw new Error("item report did not include any rows");
       const withBrand = Array.from(map.values()).filter((r) => r.brand).length;
       const withImage = Array.from(map.values()).filter((r) => r.mainImageUrl).length;
-      console.log(`[WFS:catalog] item report rows=${map.size} brand=${withBrand} image=${withImage}`);
+      const withPrice = Array.from(map.values()).filter((r) => hasEnrichedValue(r.price)).length;
+      const withProductType = Array.from(map.values()).filter((r) => r.productType).length;
+      console.log(`[WFS:catalog] item report rows=${map.size} brand=${withBrand} image=${withImage} price=${withPrice} productType=${withProductType}`);
       fulfillmentReportRequest = null;
       return map;
     } catch (err) {
