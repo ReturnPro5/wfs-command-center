@@ -1661,16 +1661,14 @@ async function getItemReportFulfillmentMap(required = false, forceRefresh = fals
     try {
       const requestExpired =
         !fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS;
-      const needsFreshRequest = forceRefresh && fulfillmentReportRequest?.fresh !== true;
-      if (requestExpired || needsFreshRequest) {
+      if (requestExpired || forceRefresh) {
         let requestId: string | null = null;
         let fresh = false;
-        if (!forceRefresh) {
-          try {
-            requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
-          } catch (err) {
-            console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
-          }
+        // Always prefer an existing READY report — much faster than waiting on a fresh one.
+        try {
+          requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
+        } catch (err) {
+          console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
         }
         if (!requestId) {
           const request = await walmartApi.createItemReportRequest();
