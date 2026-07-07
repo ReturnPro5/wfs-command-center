@@ -1623,8 +1623,12 @@ function getReadyReportRequestId(payload: any): string | null {
   return null;
 }
 
-async function getItemReportFulfillmentMap(required = false): Promise<Map<string, ItemReportRow>> {
-  if (fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
+async function getItemReportFulfillmentMap(required = false, forceRefresh = false): Promise<Map<string, ItemReportRow>> {
+  if (forceRefresh) {
+    fulfillmentReportCache = null;
+    fulfillmentReportRequest = null;
+  }
+  if (!forceRefresh && fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
     return fulfillmentReportCache.promise;
   }
 
@@ -4520,7 +4524,7 @@ export const backfillItemReportEnrichment = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<BackfillItemReportEnrichmentResult> => {
     await getWalmartAccessToken();
-    const reportMap = await getItemReportFulfillmentMap();
+    const reportMap = await getItemReportFulfillmentMap(true, true);
     const batchSize = data.batchSize ?? 1000;
 
     let from = 0;
