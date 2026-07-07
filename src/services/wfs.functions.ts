@@ -4370,10 +4370,12 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     if (data.onlySkus && data.onlySkus.length > 0) {
       query = query.in("sku", data.onlySkus);
     } else if (!data.reenrich) {
-      // "Enrich pending" must also revisit partial rows. Imports often fill
-      // dimensions/country first, leaving a SKU marked partial until the next
-      // API pass fills price/product type/image from Walmart.
-      query = query.in("enrichment_status", ["pending", "partial", "error"]);
+      // "Enrich pending" revisits pending + partial rows. SKUs already marked
+      // "error" (Walmart 404 for retired items) are permanent failures — do
+      // NOT retry them on every pass; the user must hit Re-enrich to force
+      // another attempt. Otherwise the same handful of 404s keep re-consuming
+      // batch slots and the loop appears to "not make progress".
+      query = query.in("enrichment_status", ["pending", "partial"]);
     }
     if (data.afterSku) query = query.gt("sku", data.afterSku);
 
@@ -4391,7 +4393,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const details: Array<{ sku: string; status: string; missing: string[]; error?: string }> = [];
     const now = new Date().toISOString();
 
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 8;
     let idx = 0;
     async function worker() {
       while (idx < skus.length) {

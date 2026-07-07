@@ -619,7 +619,7 @@ export function BulkConvertWfs({
       while (!stopEnrichRef.current) {
         try {
           const res = await enrichCatalogStep({
-            data: { batchSize: 50, afterSku: cursor ?? undefined, reenrich },
+            data: { batchSize: 150, afterSku: cursor ?? undefined, reenrich },
           });
           consecutiveErrors = 0;
           totalProcessed += res.processed;
