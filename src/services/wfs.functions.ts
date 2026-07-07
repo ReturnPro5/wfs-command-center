@@ -1522,6 +1522,69 @@ async function parseFulfillmentReportFile(bytes: Uint8Array, contentType: string
   return parser.map;
 }
 
+async function parseFulfillmentReportResponse(response: Response): Promise<Map<string, ItemReportRow>> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return parseFulfillmentReportFile(bytes, response.headers.get("content-type") ?? "");
+  }
+
+  const first = await reader.read();
+  if (first.done || !first.value) return new Map<string, ItemReportRow>();
+
+  const isZip =
+    first.value.length >= 4 &&
+    first.value[0] === 0x50 &&
+    first.value[1] === 0x4b &&
+    first.value[2] === 0x03 &&
+    first.value[3] === 0x04;
+
+  if (!isZip) {
+    const parser = createFulfillmentReportParser();
+    const decoder = new TextDecoder();
+    let chunk: ReadableStreamReadResult<Uint8Array> = first;
+    while (!chunk.done) {
+      parser.push(decoder.decode(chunk.value, { stream: true }), false);
+      chunk = await reader.read();
+    }
+    parser.push(decoder.decode(), true);
+    return parser.map;
+  }
+
+  const { Unzip, UnzipInflate, DecodeUTF8 } = await import("fflate");
+  const parser = createFulfillmentReportParser();
+  const unzipper = new Unzip();
+  unzipper.register(UnzipInflate);
+  let selected = false;
+  let streamError: Error | null = null;
+
+  unzipper.onfile = (file) => {
+    if (selected) return;
+    if (!/\.(csv|tsv|txt)$/i.test(file.name) && file.name) return;
+    selected = true;
+    const decoder = new DecodeUTF8((text, final) => parser.push(text, final));
+    file.ondata = (err, data, final) => {
+      if (err) {
+        streamError = err;
+        return;
+      }
+      decoder.push(data, final);
+    };
+    file.start();
+  };
+
+  let chunk: ReadableStreamReadResult<Uint8Array> = first;
+  while (!chunk.done) {
+    const next = await reader.read();
+    unzipper.push(chunk.value, next.done);
+    chunk = next;
+  }
+
+  if (streamError) throw streamError;
+  if (!selected) throw new Error("report zip did not contain a text file");
+  return parser.map;
+}
+
 
 
 function getReportRequestId(payload: any): string | null {
@@ -1550,7 +1613,7 @@ function getReadyReportRequestId(payload: any): string | null {
     return /READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(status) && getReportRequestId(row);
   });
   const preferred =
-    readyRows.find((row) => String(row?.reportVersion ?? "").toLowerCase() === "v6") ??
+    readyRows.find((row) => String(row?.reportVersion ?? "").toLowerCase() === "v4") ??
     readyRows.find((row) => /scheduler|sc/i.test(String(row?.src ?? ""))) ??
     readyRows[0];
   if (preferred) {
@@ -1560,7 +1623,7 @@ function getReadyReportRequestId(payload: any): string | null {
   return null;
 }
 
-async function getItemReportFulfillmentMap(): Promise<Map<string, ItemReportRow>> {
+async function getItemReportFulfillmentMap(required = false): Promise<Map<string, ItemReportRow>> {
   if (fulfillmentReportCache && Date.now() - fulfillmentReportCache.ts < FULFILLMENT_REPORT_CACHE_TTL_MS) {
     return fulfillmentReportCache.promise;
   }
@@ -1596,8 +1659,8 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, ItemReportRow>
         throw new Error(`item report is ${rawStatus || "not ready"}`);
       }
 
-      const downloaded = await walmartApi.downloadReportFile(requestId);
-      const map = await parseFulfillmentReportFile(downloaded.bytes, downloaded.contentType);
+      const response = await walmartApi.downloadReportResponse(requestId);
+      const map = await parseFulfillmentReportResponse(response);
       if (map.size === 0) throw new Error("item report did not include any rows");
       const withBrand = Array.from(map.values()).filter((r) => r.brand).length;
       const withImage = Array.from(map.values()).filter((r) => r.mainImageUrl).length;
@@ -1606,6 +1669,7 @@ async function getItemReportFulfillmentMap(): Promise<Map<string, ItemReportRow>
       return map;
     } catch (err) {
       console.warn("[WFS:catalog] item report unavailable; falling back to Items/WFS Inventory fields", err instanceof Error ? err.message : err);
+      if (required) throw err;
       return new Map<string, ItemReportRow>();
     }
   })();
