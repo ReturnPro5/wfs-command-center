@@ -126,6 +126,16 @@ function CatalogPage() {
   const cancelledRef = useRef(false);
   const itemsMapRef = useRef<Map<string, CatalogIdentifier>>(new Map());
 
+  async function refreshCachedCatalog() {
+    const fresh = await getCachedCatalog();
+    if (cancelledRef.current) return;
+    const map = new Map<string, CatalogIdentifier>();
+    for (const it of fresh.items) map.set(it.sku, it);
+    itemsMapRef.current = map;
+    setItems(fresh.items);
+    setState(fresh.state);
+  }
+
   // Initial load: cached items + state, then auto-sync if stale
   useEffect(() => {
     cancelledRef.current = false;
@@ -632,7 +642,7 @@ function CatalogPage() {
           </TabsContent>
 
           <TabsContent value="convert">
-            <BulkConvertWfs items={items} />
+            <BulkConvertWfs items={items} onCatalogChanged={refreshCachedCatalog} />
           </TabsContent>
 
           <TabsContent value="convert-gtin">

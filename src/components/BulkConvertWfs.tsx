@@ -284,7 +284,13 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "ok
   );
 }
 
-export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
+export function BulkConvertWfs({
+  items,
+  onCatalogChanged,
+}: {
+  items: CatalogIdentifier[];
+  onCatalogChanged?: () => Promise<void> | void;
+}) {
   // SKUs successfully converted in this session drop off the list immediately
   // so we never resubmit them.
   const [convertedSkus, setConvertedSkus] = useState<Set<string>>(new Set());
@@ -569,6 +575,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
       toast.success(
         `Updated ${updated.toLocaleString()} SKUs · skipped ${skipped.toLocaleString()} · ${allErrors.length} errors${unresolved ? ` · ${unresolved} UPC unmatched` : ""}`
       );
+      await onCatalogChanged?.();
       void refreshOverview();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -658,6 +665,7 @@ export function BulkConvertWfs({ items }: { items: CatalogIdentifier[] }) {
         `Item Report backfill scanned ${res.scanned.toLocaleString()} SKUs · updated ${res.updated.toLocaleString()} · promoted ${res.promoted.toLocaleString()} to enriched · report rows ${res.reportRows.toLocaleString()}`
       );
       toast.success(`Item Report backfill promoted ${res.promoted.toLocaleString()} SKUs to enriched`);
+      await onCatalogChanged?.();
       void refreshOverview();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
