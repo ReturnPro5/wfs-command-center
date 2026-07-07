@@ -1632,12 +1632,10 @@ async function getItemReportFulfillmentMap(required = false): Promise<Map<string
     try {
       if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
         let requestId: string | null = null;
-        if (!required) {
-          try {
-            requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
-          } catch (err) {
-            console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
-          }
+        try {
+          requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
+        } catch (err) {
+          console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
         }
         if (!requestId) {
           const request = await walmartApi.createItemReportRequest();
