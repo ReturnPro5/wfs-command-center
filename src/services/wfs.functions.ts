@@ -1654,7 +1654,8 @@ async function getItemReportFulfillmentMap(required = false, forceRefresh = fals
         if (!requestId) throw new Error(`missing requestId in item report response`);
         fulfillmentReportRequest = { ts: Date.now(), requestId, fresh };
       }
-      const requestId = fulfillmentReportRequest.requestId;
+      const requestId = fulfillmentReportRequest?.requestId;
+      if (!requestId) throw new Error("missing cached item report requestId");
 
       const pollStarted = Date.now();
       const maxPollMs = forceRefresh ? 90_000 : 0;
