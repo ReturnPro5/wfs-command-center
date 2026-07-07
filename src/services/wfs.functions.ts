@@ -1215,7 +1215,7 @@ async function getWfsFulfilledSkuSet(): Promise<Set<string>> {
   return new Set(inventory.map((item) => item.sku).filter(Boolean));
 }
 
-const FULFILLMENT_REPORT_CACHE_TTL_MS = 2 * 60 * 1000;
+const FULFILLMENT_REPORT_CACHE_TTL_MS = 30 * 60 * 1000;
 let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, ItemReportRow>> } | null = null;
 
 let fulfillmentReportRequest: { ts: number; requestId: string } | null = null;
@@ -1632,10 +1632,12 @@ async function getItemReportFulfillmentMap(required = false): Promise<Map<string
     try {
       if (!fulfillmentReportRequest || Date.now() - fulfillmentReportRequest.ts > FULFILLMENT_REPORT_CACHE_TTL_MS) {
         let requestId: string | null = null;
-        try {
-          requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
-        } catch (err) {
-          console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
+        if (!required) {
+          try {
+            requestId = getReadyReportRequestId(await walmartApi.listItemReportRequests());
+          } catch (err) {
+            console.warn("[WFS:catalog] item report list unavailable", err instanceof Error ? err.message : err);
+          }
         }
         if (!requestId) {
           const request = await walmartApi.createItemReportRequest();
