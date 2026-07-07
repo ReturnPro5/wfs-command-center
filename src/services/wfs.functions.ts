@@ -1710,7 +1710,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
     await getWalmartAccessToken();
     const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
       getWfsFulfilledSkuSet(),
-      getItemReportFulfillmentMap(true),
+      getItemReportFulfillmentMap(),
     ]);
     const lifecycle = data.lifecycle ?? "ACTIVE";
     const publishedStatus = data.publishedStatus ?? "PUBLISHED";
@@ -2594,7 +2594,7 @@ export const reclassifyFulfillmentFromReport = createServerFn({ method: "POST" }
     await getWalmartAccessToken();
     const [wfsSkuSet, reportMap] = await Promise.all([
       getWfsFulfilledSkuSet(),
-      getItemReportFulfillmentMap(),
+      getItemReportFulfillmentMap(true),
     ]);
 
     let query = supabaseAdmin
