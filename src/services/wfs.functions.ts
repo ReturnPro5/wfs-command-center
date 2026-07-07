@@ -1220,6 +1220,32 @@ let fulfillmentReportCache: { ts: number; promise: Promise<Map<string, ItemRepor
 
 let fulfillmentReportRequest: { ts: number; requestId: string; fresh: boolean } | null = null;
 
+class ItemReportPreparingError extends Error {
+  status: string;
+  requestId: string;
+
+  constructor(status: string, requestId: string) {
+    super(
+      `fresh item report is ${status || "not ready"}; Walmart is still preparing it. Backfill will check again shortly.`
+    );
+    this.name = "ItemReportPreparingError";
+    this.status = status;
+    this.requestId = requestId;
+  }
+}
+
+function getItemReportPreparingDetails(err: unknown): { status: string; message: string } | null {
+  if (err instanceof ItemReportPreparingError) {
+    return { status: err.status, message: err.message };
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  if (/Walmart is still preparing|fresh item report/i.test(message)) {
+    const status = message.match(/item report is ([^;]+)/i)?.[1]?.trim().toUpperCase() ?? "not ready";
+    return { status, message };
+  }
+  return null;
+}
+
 function normalizeFulfillmentType(value: unknown): FulfillmentType | null {
   const v = String(value ?? "").trim().toLowerCase();
   if (!v) return null;
@@ -1672,9 +1698,7 @@ async function getItemReportFulfillmentMap(required = false, forceRefresh = fals
         if (/FAIL|FAILED|ERROR/.test(rawStatus)) throw new Error(`item report status ${rawStatus}`);
         if (/READY|COMPLETE|COMPLETED|DONE|SUCCESS/.test(rawStatus)) break;
         if (Date.now() - pollStarted >= maxPollMs) {
-          throw new Error(
-            `fresh item report is ${rawStatus || "not ready"}; Walmart is still preparing it. Try Backfill Item Report fields again in a minute.`
-          );
+          throw new ItemReportPreparingError(rawStatus || "not ready", requestId);
         }
         await new Promise((r) => setTimeout(r, 5_000));
       }
@@ -4525,6 +4549,9 @@ export interface BackfillItemReportEnrichmentResult {
   promoted: number;
   partial: number;
   missingReportRows: number;
+  pending?: boolean;
+  reportStatus?: string;
+  message?: string;
 }
 
 // Fast backfill for the fields Walmart only exposes reliably in the Item
@@ -4542,7 +4569,26 @@ export const backfillItemReportEnrichment = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }): Promise<BackfillItemReportEnrichmentResult> => {
     await getWalmartAccessToken();
-    const reportMap = await getItemReportFulfillmentMap(true, true);
+    let reportMap: Map<string, ItemReportRow>;
+    try {
+      reportMap = await getItemReportFulfillmentMap(true, true);
+    } catch (err) {
+      const preparing = getItemReportPreparingDetails(err);
+      if (preparing) {
+        return {
+          reportRows: 0,
+          scanned: 0,
+          updated: 0,
+          promoted: 0,
+          partial: 0,
+          missingReportRows: 0,
+          pending: true,
+          reportStatus: preparing.status,
+          message: preparing.message,
+        };
+      }
+      throw err;
+    }
     const batchSize = data.batchSize ?? 1000;
 
     let from = 0;
