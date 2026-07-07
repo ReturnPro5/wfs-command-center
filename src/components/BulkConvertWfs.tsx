@@ -661,7 +661,19 @@ export function BulkConvertWfs({
     setReportBackfilling(true);
     setEnrichProgress("Loading the latest Walmart Item Report to fill image, price, product type, and brand…");
     try {
-      const res = await backfillItemReportEnrichment({ data: { batchSize: 1000 } });
+      let res = await backfillItemReportEnrichment({ data: { batchSize: 1000 } });
+      for (let attempt = 1; res.pending && attempt <= 6; attempt++) {
+        setEnrichProgress(
+          `${res.message ?? "Walmart is still preparing the Item Report."} Checking again in 20 seconds (${attempt}/6)…`
+        );
+        await new Promise((r) => setTimeout(r, 20_000));
+        res = await backfillItemReportEnrichment({ data: { batchSize: 1000 } });
+      }
+      if (res.pending) {
+        setEnrichProgress(res.message ?? "Walmart is still preparing the Item Report. Try again in a minute.");
+        toast.info("Walmart is still preparing the Item Report. Try again in a minute.");
+        return;
+      }
       setEnrichProgress(
         `Item Report backfill scanned ${res.scanned.toLocaleString()} SKUs · updated ${res.updated.toLocaleString()} · promoted ${res.promoted.toLocaleString()} to enriched · report rows ${res.reportRows.toLocaleString()}`
       );
