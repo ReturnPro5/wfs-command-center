@@ -1710,7 +1710,7 @@ export const getCatalogPage = createServerFn({ method: "POST" })
     await getWalmartAccessToken();
     const [wfsSkuSet, itemReportFulfillment] = await Promise.all([
       getWfsFulfilledSkuSet(),
-      getItemReportFulfillmentMap(),
+      getItemReportFulfillmentMap(true),
     ]);
     const lifecycle = data.lifecycle ?? "ACTIVE";
     const publishedStatus = data.publishedStatus ?? "PUBLISHED";
@@ -2683,7 +2683,7 @@ export const backfillPricesFromReport = createServerFn({ method: "POST" })
     const batchSize = data.batchSize ?? 500;
     const overwrite = data.overwrite ?? true;
     await getWalmartAccessToken();
-    const reportMap = await getItemReportFulfillmentMap();
+    const reportMap = await getItemReportFulfillmentMap(true);
 
     let query = supabaseAdmin
       .from("catalog_items")
