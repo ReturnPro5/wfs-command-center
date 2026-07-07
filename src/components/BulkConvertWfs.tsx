@@ -295,12 +295,13 @@ export function BulkConvertWfs({
   // so we never resubmit them.
   const [convertedSkus, setConvertedSkus] = useState<Set<string>>(new Set());
 
-  // Only "Seller Fulfilled" Open Box items with SKUs ending in "ND" are eligible.
-  // Walmart Fulfilled, "Seller Fulfilled (WFS Eligible)", and Unknown are excluded entirely.
+  // Only seller-fulfilled Open Box items with SKUs ending in "ND" are eligible.
+  // Keep WFS-eligible seller rows visible after the Item Report reclassify pass.
   const eligibleAll: Row[] = useMemo(() => {
     return items
       .filter((r) => {
-        if ((r.fulfillment ?? "Unknown") !== "Seller Fulfilled") return false;
+        const fulfillment = r.fulfillment ?? "Unknown";
+        if (fulfillment !== "Seller Fulfilled" && fulfillment !== "Seller Fulfilled (WFS Eligible)") return false;
         if (convertedSkus.has(r.sku)) return false;
         if (!/ND$/i.test(r.sku)) return false;
         const cond = (r.condition ?? "").toLowerCase().replace(/[\s_-]/g, "");
