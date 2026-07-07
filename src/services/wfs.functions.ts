@@ -4393,7 +4393,7 @@ export const enrichCatalogStep = createServerFn({ method: "POST" })
     const details: Array<{ sku: string; status: string; missing: string[]; error?: string }> = [];
     const now = new Date().toISOString();
 
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 8;
     let idx = 0;
     async function worker() {
       while (idx < skus.length) {
