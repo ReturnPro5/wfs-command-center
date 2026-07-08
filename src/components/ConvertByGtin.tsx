@@ -121,6 +121,10 @@ function parseCsv(text: string): string[][] {
   let i = 0;
   let inQuotes = false;
   const src = text.replace(/\r\n?/g, "\n");
+  const firstLine = src.split("\n").find((line) => line.trim().length > 0) ?? "";
+  const delimiter = [",", "\t", ";", "|"]
+    .map((candidate) => ({ candidate, count: firstLine.split(candidate).length - 1 }))
+    .sort((a, b) => b.count - a.count)[0]?.candidate ?? ",";
   while (i < src.length) {
     const c = src[i];
     if (inQuotes) {
@@ -131,7 +135,7 @@ function parseCsv(text: string): string[][] {
       cell += c; i++; continue;
     }
     if (c === '"') { inQuotes = true; i++; continue; }
-    if (c === ",") { row.push(cell); cell = ""; i++; continue; }
+    if (c === delimiter) { row.push(cell); cell = ""; i++; continue; }
     if (c === "\n") { row.push(cell); out.push(row); row = []; cell = ""; i++; continue; }
     if (c === "=" && src[i + 1] === '"') { i++; continue; }
     cell += c; i++;
@@ -159,11 +163,20 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const errors: string[] = [];
   const grid = parseCsv(text);
   if (grid.length === 0) return { rows: [], errors: ["empty file"] };
-  const header = grid[0].map((h) => h.trim().toLowerCase().replace(/^\ufeff/, ""));
+  const cleanHeader = (h: string) => h.trim().toLowerCase().replace(/^\ufeff/, "").replace(/^["'=]+|["']+$/g, "").trim();
+  const headerKey = (h: string) => cleanHeader(h).replace(/[\s_\-./()]+/g, "");
+  const header = grid[0].map(cleanHeader);
+  const headerKeys = grid[0].map(headerKey);
   const idx = (names: string[]) =>
-    header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
-  const iSku = idx(["sku"]);
-  const iUpc = idx(["upc"]);
+    header.findIndex((h, i) => {
+      const key = headerKeys[i];
+      return names.some((n) => {
+        const nKey = headerKey(n);
+        return h === n || h.startsWith(n) || key === nKey || key.startsWith(nKey) || key.endsWith(nKey);
+      });
+    });
+  const iSku = idx(["sku", "seller sku", "item sku", "partner sku"]);
+  const iUpc = idx(["upc", "gtin", "product id", "productid", "item id"]);
   const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
   const iWid = idx(["width", "dimensionw", "dimension w"]);
   const iHei = idx(["height", "dimensionh", "dimension h"]);
@@ -175,7 +188,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const iPt = idx(["producttype", "product type", "category"]);
   const iPrice = idx(["price"]);
   if (iSku < 0 && iUpc < 0) {
-    errors.push("missing SKU or UPC column");
+    errors.push("missing SKU, UPC, or GTIN column");
     return { rows: [], errors };
   }
   const num = (s: string | undefined): number | null => {
@@ -241,6 +254,8 @@ export function ConvertByGtin({ items }: Props) {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importStage, setImportStage] = useState("");
 
 
 
@@ -495,12 +510,15 @@ export function ConvertByGtin({ items }: Props) {
   async function onDimensionsFile(file: File) {
     setImporting(true);
     setImportResult(null);
+    setImportError(null);
     setImportProgress(null);
+    setImportStage(`Reading ${file.name}…`);
     try {
       const text = await file.text();
       const { rows: parsed, errors } = parseDimensionsCsv(text);
       if (errors.length > 0) throw new Error(errors.join("; "));
       if (parsed.length === 0) throw new Error("no data rows found");
+      setImportStage(`Parsed ${parsed.length.toLocaleString()} rows; matching SKUs…`);
 
       // UPC/GTIN -> SKU(s) lookup from the current Convert by GTIN results.
       // Prefer eligible looked-up ND/Open Box matches over any same-UPC non-ND
@@ -571,6 +589,7 @@ export function ConvertByGtin({ items }: Props) {
       if (resolved.length === 0) {
         throw new Error(`could not match any UPC to a SKU (${unresolved} unmatched)`);
       }
+      setImportStage(`Uploading ${resolved.length.toLocaleString()} matched rows…`);
 
       const BATCH = 500;
       const CLIENT_CONCURRENCY = 4;
@@ -608,10 +627,12 @@ export function ConvertByGtin({ items }: Props) {
       );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      setImportError(msg);
       toast.error(`Import failed: ${msg}`);
     } finally {
       setImporting(false);
       setImportProgress(null);
+      setImportStage("");
       if (dimFileRef.current) dimFileRef.current.value = "";
     }
   }
@@ -763,6 +784,18 @@ export function ConvertByGtin({ items }: Props) {
             : `Convert ${resolution.matched.length.toLocaleString()} to WFS`}
         </button>
       </div>
+
+      {importing && importStage && (
+        <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs text-muted-foreground">
+          {importStage}
+        </div>
+      )}
+
+      {importError && (
+        <div className="rounded-md border border-status-critical/40 bg-status-critical/10 p-3 text-xs text-status-critical">
+          Import failed: {importError}
+        </div>
+      )}
 
       {importResult && (
         <div className="rounded-md border border-border bg-secondary/30 p-3 text-xs space-y-2">
