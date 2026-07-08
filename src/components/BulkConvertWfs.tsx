@@ -217,7 +217,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const idx = (names: string[]) =>
     header.findIndex((h) => names.some((n) => h === n || h.startsWith(n)));
   const iSku = idx(["sku"]);
-  const iUpc = idx(["upc"]);
+  const iUpc = idx(["upc", "gtin", "product id", "productid"]);
   const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
   const iWid = idx(["width", "dimensionw", "dimension w"]);
   const iHei = idx(["height", "dimensionh", "dimension h"]);
@@ -229,7 +229,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const iPt = idx(["producttype", "product type", "category"]);
   const iPrice = idx(["price"]);
   if (iSku < 0 && iUpc < 0) {
-    errors.push("missing SKU or UPC column");
+    errors.push("missing SKU, UPC, or GTIN column");
     return { rows: [], errors };
   }
   const num = (s: string | undefined): number | null => {
@@ -467,10 +467,12 @@ export function BulkConvertWfs({
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   async function onDimensionsFile(file: File) {
     setImporting(true);
     setImportResult(null);
+    setImportError(null);
     setImportProgress(null);
     try {
       const text = await file.text();
@@ -580,6 +582,7 @@ export function BulkConvertWfs({
       void refreshOverview();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      setImportError(msg);
       toast.error(`Import failed: ${msg}`);
     } finally {
       setImporting(false);
@@ -815,6 +818,12 @@ export function BulkConvertWfs({
             </button>
           </div>
         </div>
+
+        {importError && (
+          <div className="rounded-md border border-status-critical/40 bg-status-critical/10 px-3 py-2 text-xs text-status-critical">
+            Import failed: {importError}
+          </div>
+        )}
 
         {importResult && (
           <div className="space-y-1 text-xs">
