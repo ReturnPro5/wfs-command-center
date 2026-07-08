@@ -121,9 +121,11 @@ function parseCsv(text: string): string[][] {
   let i = 0;
   let inQuotes = false;
   const src = text.replace(/\r\n?/g, "\n");
-  const firstLine = src.split("\n").find((line) => line.trim().length > 0) ?? "";
-  const delimiter = [",", "\t", ";", "|"]
-    .map((candidate) => ({ candidate, count: firstLine.split(candidate).length - 1 }))
+  const lines = src.split("\n");
+  const firstLine = lines.find((line) => line.trim().length > 0) ?? "";
+  const sepDirective = firstLine.trim().match(/^sep\s*=\s*([^\s])$/i);
+  const delimiter = sepDirective?.[1] ?? [",", "\t", ";", "|"]
+    .map((candidate) => ({ candidate, count: lines.slice(0, 10).reduce((sum, line) => sum + line.split(candidate).length - 1, 0) }))
     .sort((a, b) => b.count - a.count)[0]?.candidate ?? ",";
   while (i < src.length) {
     const c = src[i];
@@ -165,8 +167,31 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   if (grid.length === 0) return { rows: [], errors: ["empty file"] };
   const cleanHeader = (h: string) => h.trim().toLowerCase().replace(/^\ufeff/, "").replace(/^["'=]+|["']+$/g, "").trim();
   const headerKey = (h: string) => cleanHeader(h).replace(/[\s_\-./()]+/g, "");
-  const header = grid[0].map(cleanHeader);
-  const headerKeys = grid[0].map(headerKey);
+  const headerCandidates = [
+    ["sku", "seller sku", "item sku", "partner sku", "merchant sku"],
+    ["upc", "gtin", "product id", "productid", "item id", "itemid", "product identifier", "productidentifier", "external product id", "externalproductid"],
+  ];
+  const headerRowIndex = grid.findIndex((candidate, rowIndex) => {
+    if (rowIndex > 25) return false;
+    const cleaned = candidate.map(cleanHeader);
+    const keys = candidate.map(headerKey);
+    if (keys.length === 1 && /^sep=./i.test(cleaned[0])) return false;
+    const hasHeader = (names: string[]) => cleaned.some((h, i) => {
+      const key = keys[i];
+      if (key.includes("type") || key.includes("kind")) return false;
+      return names.some((n) => {
+        const nKey = headerKey(n);
+        return h === n || h.startsWith(n) || key === nKey || key.startsWith(nKey) || key.endsWith(nKey);
+      });
+    });
+    return headerCandidates.some(hasHeader);
+  });
+  if (headerRowIndex < 0) {
+    errors.push("missing SKU, UPC, or GTIN column");
+    return { rows: [], errors };
+  }
+  const header = grid[headerRowIndex].map(cleanHeader);
+  const headerKeys = grid[headerRowIndex].map(headerKey);
   const idx = (names: string[]) =>
     header.findIndex((h, i) => {
       const key = headerKeys[i];
@@ -176,7 +201,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
       });
     });
   const idxIdentifier = () => {
-    const names = ["upc", "gtin", "product id", "productid", "item id"];
+    const names = ["upc", "gtin", "product id", "productid", "item id", "itemid", "product identifier", "productidentifier", "external product id", "externalproductid"];
     return header.findIndex((h, i) => {
       const key = headerKeys[i];
       if (key.includes("type") || key.includes("kind")) return false;
@@ -186,13 +211,14 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
       });
     });
   };
-  const iSku = idx(["sku", "seller sku", "item sku", "partner sku"]);
+  const iSku = idx(["sku", "seller sku", "item sku", "partner sku", "merchant sku"]);
   const iUpc = idxIdentifier();
-  const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
-  const iWid = idx(["width", "dimensionw", "dimension w"]);
-  const iHei = idx(["height", "dimensionh", "dimension h"]);
-  const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
-  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country"]);
+  const iIdentifierType = idx(["product id type", "productidtype", "id type", "identifier type", "product identifier type"]);
+  const iLen = idx(["length", "shipping length", "shippinglength", "package length", "packagelength", "dimensiond", "dimension d", "depth"]);
+  const iWid = idx(["width", "shipping width", "shippingwidth", "package width", "packagewidth", "dimensionw", "dimension w"]);
+  const iHei = idx(["height", "shipping height", "shippingheight", "package height", "packageheight", "dimensionh", "dimension h"]);
+  const iWgt = idx(["weight", "shippingweight", "shipping weight", "package weight", "packageweight"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country region of origin", "countryregionoforigin", "origin country", "country"]);
   const iBrand = idx(["brand"]);
   const iMfr = idx(["manufacturer", "mfr"]);
   const iImg = idx(["mainimageurl", "main image url", "imageurl", "image"]);
@@ -212,10 +238,14 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const clean = (s: string | undefined): string =>
     (s ?? "").replace(/^\ufeff/, "").trim().replace(/[",=]/g, "").replace(/^'+/, "").trim();
   const rows: ParsedDimRow[] = [];
-  for (let r = 1; r < grid.length; r++) {
+  for (let r = headerRowIndex + 1; r < grid.length; r++) {
     const cells = grid[r];
-    const sku = iSku >= 0 ? clean(cells[iSku]) : "";
-      const upc = iUpc >= 0 ? normalizeId(clean(cells[iUpc])) : "";
+    const directSku = iSku >= 0 ? clean(cells[iSku]) : "";
+    const identifier = iUpc >= 0 ? clean(cells[iUpc]) : "";
+    const identifierType = iIdentifierType >= 0 ? clean(cells[iIdentifierType]).toLowerCase() : "";
+    const identifierIsSku = /sku/.test(identifierType) || (!identifierType && /[a-z]/i.test(identifier));
+    const sku = directSku || (identifier && identifierIsSku ? identifier : "");
+    const upc = identifier && !identifierIsSku ? normalizeId(identifier) : "";
     if (!sku && !upc) continue;
     rows.push({
       sku: sku || undefined,
