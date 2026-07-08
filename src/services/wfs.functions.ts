@@ -4678,3 +4678,87 @@ export const backfillItemReportEnrichment = createServerFn({ method: "POST" })
       missingReportRows,
     };
   });
+
+// ─── Feed Lookup (debug submitted feeds & error reports) ────────────────
+export interface FeedLookupError {
+  sku?: string;
+  wpid?: string;
+  index?: number;
+  status?: string;
+  type?: string;
+  code?: string;
+  field?: string;
+  description?: string;
+}
+
+export interface FeedLookupResult {
+  feedId: string;
+  feedStatus?: string;
+  feedType?: string;
+  feedSubmissionDate?: string;
+  itemsReceived?: number;
+  itemsSucceeded?: number;
+  itemsFailed?: number;
+  itemsProcessing?: number;
+  errors: FeedLookupError[];
+  raw: unknown;
+}
+
+export const getFeedLookup = createServerFn({ method: "POST" })
+  .inputValidator((d: { feedId: string }) =>
+    z.object({ feedId: z.string().trim().min(1) }).parse(d)
+  )
+  .handler(async ({ data }): Promise<FeedLookupResult> => {
+    const raw = await walmartApi.getFeedStatus(data.feedId, true);
+    const errors: FeedLookupError[] = [];
+    const details =
+      raw?.itemDetails?.itemIngestionStatus ??
+      raw?.itemDetails?.itemDetails ??
+      [];
+    if (Array.isArray(details)) {
+      for (const it of details) {
+        const status =
+          it?.ingestionStatus ?? it?.status ?? it?.itemIngestionStatus ?? "";
+        const errList =
+          it?.ingestionErrors?.ingestionError ??
+          it?.ingestionErrors ??
+          it?.errors ??
+          [];
+        const errArr = Array.isArray(errList) ? errList : [errList];
+        if (errArr.length === 0 && /FAIL|ERROR/i.test(String(status))) {
+          errors.push({
+            sku: it?.sku,
+            wpid: it?.wpid,
+            index: it?.index,
+            status,
+          });
+          continue;
+        }
+        for (const e of errArr) {
+          if (!e) continue;
+          errors.push({
+            sku: it?.sku,
+            wpid: it?.wpid,
+            index: it?.index,
+            status,
+            type: e?.type,
+            code: e?.code,
+            field: e?.field,
+            description: e?.description ?? e?.message,
+          });
+        }
+      }
+    }
+    return {
+      feedId: raw?.feedId ?? data.feedId,
+      feedStatus: raw?.feedStatus,
+      feedType: raw?.feedType,
+      feedSubmissionDate: raw?.feedSubmissionDate,
+      itemsReceived: raw?.itemsReceived,
+      itemsSucceeded: raw?.itemsSucceeded,
+      itemsFailed: raw?.itemsFailed,
+      itemsProcessing: raw?.itemsProcessing,
+      errors,
+      raw,
+    };
+  });
