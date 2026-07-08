@@ -232,8 +232,19 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
         return h === n || h.startsWith(n) || key === nKey || key.startsWith(nKey) || key.endsWith(nKey);
       });
     });
+  const idxIdentifier = () => {
+    const names = ["upc", "gtin", "product id", "productid", "item id"];
+    return header.findIndex((h, i) => {
+      const key = headerKeys[i];
+      if (key.includes("type") || key.includes("kind")) return false;
+      return names.some((n) => {
+        const nKey = headerKey(n);
+        return h === n || h.startsWith(n) || key === nKey || key.startsWith(nKey) || key.endsWith(nKey);
+      });
+    });
+  };
   const iSku = idx(["sku", "seller sku", "item sku", "partner sku"]);
-  const iUpc = idx(["upc", "gtin", "product id", "productid", "item id"]);
+  const iUpc = idxIdentifier();
   const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
   const iWid = idx(["width", "dimensionw", "dimension w"]);
   const iHei = idx(["height", "dimensionh", "dimension h"]);
