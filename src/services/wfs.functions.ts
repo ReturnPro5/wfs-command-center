@@ -4701,7 +4701,7 @@ export interface FeedLookupResult {
   itemsFailed?: number;
   itemsProcessing?: number;
   errors: FeedLookupError[];
-  raw: unknown;
+  raw: any;
 }
 
 export const getFeedLookup = createServerFn({ method: "POST" })
