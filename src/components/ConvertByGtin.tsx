@@ -752,6 +752,113 @@ export function ConvertByGtin({ items }: Props) {
         then submit.
       </div>
 
+      <div className="rounded-md border border-border bg-secondary/30 p-3 space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Feed ID lookup
+          </span>
+          <span className="text-xs text-muted-foreground">
+            — check status & error report for any submitted WFS feed
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={feedIdInput}
+            onChange={(e) => setFeedIdInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void runFeedLookup();
+            }}
+            placeholder="e.g. 8F1A2B3C-DEAD-BEEF-…"
+            className="flex-1 min-w-[280px] rounded border border-border bg-background px-2 py-1.5 font-mono text-xs"
+          />
+          <button
+            onClick={() => void runFeedLookup()}
+            disabled={feedLookupLoading || !feedIdInput.trim()}
+            className="rounded-md border border-border bg-secondary px-3 py-1.5 text-sm font-medium hover:bg-secondary/70 disabled:opacity-50"
+          >
+            {feedLookupLoading ? "Loading…" : "Look up feed"}
+          </button>
+          {feedLookup && (
+            <button
+              onClick={() => {
+                setFeedLookup(null);
+                setFeedLookupError(null);
+                setFeedIdInput("");
+              }}
+              className="rounded border border-border bg-secondary px-2 py-1.5 text-xs hover:bg-secondary/70"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        {feedLookupError && (
+          <div className="rounded-md border border-status-critical/40 bg-status-critical/10 p-2 text-xs text-status-critical">
+            {feedLookupError}
+          </div>
+        )}
+        {feedLookup && (
+          <div className="space-y-2 text-xs">
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span><span className="text-muted-foreground">Feed:</span> <span className="font-mono">{feedLookup.feedId}</span></span>
+              {feedLookup.feedType && (
+                <span><span className="text-muted-foreground">Type:</span> {feedLookup.feedType}</span>
+              )}
+              {feedLookup.feedStatus && (
+                <span><span className="text-muted-foreground">Status:</span> <strong>{feedLookup.feedStatus}</strong></span>
+              )}
+              {feedLookup.feedSubmissionDate && (
+                <span><span className="text-muted-foreground">Submitted:</span> {new Date(feedLookup.feedSubmissionDate).toLocaleString()}</span>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <span>Received: {feedLookup.itemsReceived ?? 0}</span>
+              <span className="text-status-healthy">Succeeded: {feedLookup.itemsSucceeded ?? 0}</span>
+              <span className="text-status-critical">Failed: {feedLookup.itemsFailed ?? 0}</span>
+              <span className="text-muted-foreground">Processing: {feedLookup.itemsProcessing ?? 0}</span>
+            </div>
+            {feedLookup.errors.length > 0 ? (
+              <div className="rounded border border-border bg-background/50">
+                <div className="border-b border-border px-2 py-1 text-xs font-medium text-status-critical">
+                  {feedLookup.errors.length.toLocaleString()} error{feedLookup.errors.length === 1 ? "" : "s"}
+                </div>
+                <div className="max-h-72 overflow-y-auto">
+                  <table className="w-full text-xs font-mono">
+                    <thead className="sticky top-0 bg-secondary/70">
+                      <tr className="text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <th className="px-2 py-1">SKU</th>
+                        <th className="px-2 py-1">Code</th>
+                        <th className="px-2 py-1">Field</th>
+                        <th className="px-2 py-1">Description</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {feedLookup.errors.slice(0, 500).map((e, i) => (
+                        <tr key={i} className="border-t border-border/50 align-top">
+                          <td className="px-2 py-1 text-primary">{e.sku ?? "—"}</td>
+                          <td className="px-2 py-1">{e.code ?? e.type ?? e.status ?? "—"}</td>
+                          <td className="px-2 py-1">{e.field ?? "—"}</td>
+                          <td className="px-2 py-1 whitespace-pre-wrap break-words">{e.description ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="text-muted-foreground">No item-level errors reported.</div>
+            )}
+            <details>
+              <summary className="cursor-pointer text-muted-foreground">Raw response</summary>
+              <pre className="mt-1 max-h-72 overflow-auto rounded border border-border bg-background/50 p-2 text-[10px]">
+{JSON.stringify(feedLookup.raw, null, 2)}
+              </pre>
+            </details>
+          </div>
+        )}
+      </div>
+
+
+
       <Textarea
         value={pasted}
         onChange={(e) => setPasted(e.target.value)}
