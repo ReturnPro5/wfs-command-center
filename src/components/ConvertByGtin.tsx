@@ -299,6 +299,33 @@ export function ConvertByGtin({ items }: Props) {
   const [importResult, setImportResult] = useState<ImportDimensionsResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importStage, setImportStage] = useState("");
+  // Feed ID lookup (debug submitted WFS conversion feeds)
+  const [feedIdInput, setFeedIdInput] = useState("");
+  const [feedLookup, setFeedLookup] = useState<FeedLookupResult | null>(null);
+  const [feedLookupLoading, setFeedLookupLoading] = useState(false);
+  const [feedLookupError, setFeedLookupError] = useState<string | null>(null);
+
+  async function runFeedLookup() {
+    const id = feedIdInput.trim();
+    if (!id) return;
+    setFeedLookupLoading(true);
+    setFeedLookupError(null);
+    setFeedLookup(null);
+    try {
+      const res = await getFeedLookup({ data: { feedId: id } });
+      setFeedLookup(res);
+      toast.success(
+        `Feed ${res.feedId}: ${res.feedStatus ?? "?"} · ${res.itemsSucceeded ?? 0} ok · ${res.itemsFailed ?? 0} failed`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setFeedLookupError(msg);
+      toast.error(`Feed lookup failed: ${msg}`);
+    } finally {
+      setFeedLookupLoading(false);
+    }
+  }
+
 
 
 
