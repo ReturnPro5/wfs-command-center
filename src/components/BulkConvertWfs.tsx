@@ -268,13 +268,14 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
       });
     });
   };
-  const iSku = idx(["sku", "seller sku", "item sku", "partner sku"]);
+  const iSku = idx(["sku", "seller sku", "item sku", "partner sku", "merchant sku"]);
   const iUpc = idxIdentifier();
-  const iLen = idx(["length", "dimensiond", "dimension d", "depth"]);
-  const iWid = idx(["width", "dimensionw", "dimension w"]);
-  const iHei = idx(["height", "dimensionh", "dimension h"]);
-  const iWgt = idx(["weight", "shippingweight", "shipping weight"]);
-  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country"]);
+  const iIdentifierType = idx(["product id type", "productidtype", "id type", "identifier type", "product identifier type"]);
+  const iLen = idx(["length", "shipping length", "shippinglength", "package length", "packagelength", "dimensiond", "dimension d", "depth"]);
+  const iWid = idx(["width", "shipping width", "shippingwidth", "package width", "packagewidth", "dimensionw", "dimension w"]);
+  const iHei = idx(["height", "shipping height", "shippingheight", "package height", "packageheight", "dimensionh", "dimension h"]);
+  const iWgt = idx(["weight", "shippingweight", "shipping weight", "package weight", "packageweight"]);
+  const iCoo = idx(["country of origin", "country_of_origin", "countryoforigin", "country region of origin", "countryregionoforigin", "origin country", "country"]);
   const iBrand = idx(["brand"]);
   const iMfr = idx(["manufacturer", "mfr"]);
   const iImg = idx(["mainimageurl", "main image url", "imageurl", "image"]);
@@ -296,8 +297,12 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const rows: ParsedDimRow[] = [];
   for (let r = headerRowIndex + 1; r < grid.length; r++) {
     const cells = grid[r];
-    const sku = iSku >= 0 ? clean(cells[iSku]) : "";
-      const upc = iUpc >= 0 ? normalizeId(clean(cells[iUpc])) : "";
+    const directSku = iSku >= 0 ? clean(cells[iSku]) : "";
+    const identifier = iUpc >= 0 ? clean(cells[iUpc]) : "";
+    const identifierType = iIdentifierType >= 0 ? clean(cells[iIdentifierType]).toLowerCase() : "";
+    const identifierIsSku = /sku/.test(identifierType) || (!identifierType && /[a-z]/i.test(identifier));
+    const sku = directSku || (identifier && identifierIsSku ? identifier : "");
+    const upc = identifier && !identifierIsSku ? normalizeId(identifier) : "";
     if (!sku && !upc) continue;
     rows.push({
       sku: sku || undefined,
