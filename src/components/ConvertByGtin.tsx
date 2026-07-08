@@ -3,10 +3,12 @@ import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   enrichCatalogStep,
+  getFeedLookup,
   importDimensions,
   resolveIdentifiers,
   submitWfsConversion,
   type CatalogIdentifier,
+  type FeedLookupResult,
   type ImportDimensionsResult,
   type WfsConversionRunResult,
 } from "@/services/wfs.functions";
