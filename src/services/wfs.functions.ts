@@ -2160,12 +2160,29 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
               try {
                 let nextCursor: string | null = null;
                 let pages = 0;
+                const tokenVariants = new Set(identifierVariants(token));
                 do {
                   const raw = await walmartApi.searchItemsByIdentifier(kind, searchValue, nextCursor ?? undefined);
                   const page = parseSearchPage(raw);
                   for (const candidate of page.candidates) {
                     const sku = String(candidate?.sku ?? candidate?.SKU ?? candidate?.mart_sku ?? "");
-                    if (sku && !list.some((existing) => String(existing?.sku ?? existing?.SKU ?? existing?.mart_sku ?? "") === sku)) {
+                    if (!sku) continue;
+                    // Walmart's /v3/items?gtin= / ?upc= filter is loose and can
+                    // return items that don't actually share the identifier.
+                    // If the candidate carries a gtin/upc, require it to match
+                    // the pasted token; drop mismatches. Candidates with no
+                    // identifier at all are kept (Walmart sometimes omits them).
+                    const candGtin = String(candidate?.gtin ?? candidate?.GTIN ?? "").trim();
+                    const candUpc = String(candidate?.upc ?? candidate?.UPC ?? "").trim();
+                    if (candGtin || candUpc) {
+                      const candIds = [
+                        ...identifierVariants(candGtin),
+                        ...identifierVariants(candUpc),
+                      ];
+                      const matches = candIds.some((id) => tokenVariants.has(id));
+                      if (!matches) continue;
+                    }
+                    if (!list.some((existing) => String(existing?.sku ?? existing?.SKU ?? existing?.mart_sku ?? "") === sku)) {
                       list.push(candidate);
                     }
                   }
@@ -2174,6 +2191,7 @@ export const resolveIdentifiers = createServerFn({ method: "POST" })
                   // The endpoint returns up to 200 now; five pages is already far
                   // beyond the variants expected for one GTIN and prevents runaway loops.
                 } while (nextCursor && pages < 5);
+
                 break; // success (with or without candidates) — try next variant/kind
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
