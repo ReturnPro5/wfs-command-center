@@ -143,11 +143,13 @@ function parseCsv(text: string): string[][] {
   let i = 0;
   let inQuotes = false;
   const src = text.replace(/\r\n?/g, "\n");
-  const firstLine = src.split("\n").find((line) => line.trim().length > 0) ?? "";
-  const delimiter = [",", "\t", ";", "|"]
+  const lines = src.split("\n");
+  const firstLine = lines.find((line) => line.trim().length > 0) ?? "";
+  const sepDirective = firstLine.trim().match(/^sep\s*=\s*([^\s])$/i);
+  const delimiter = sepDirective?.[1] ?? [",", "\t", ";", "|"]
     .map((candidate) => ({
       candidate,
-      count: firstLine.split(candidate).length - 1,
+      count: lines.slice(0, 10).reduce((sum, line) => sum + line.split(candidate).length - 1, 0),
     }))
     .sort((a, b) => b.count - a.count)[0]?.candidate ?? ",";
   while (i < src.length) {
@@ -222,8 +224,31 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   if (grid.length === 0) return { rows: [], errors: ["empty file"] };
   const cleanHeader = (h: string) => h.trim().toLowerCase().replace(/^\ufeff/, "").replace(/^["'=]+|["']+$/g, "").trim();
   const headerKey = (h: string) => cleanHeader(h).replace(/[\s_\-./()]+/g, "");
-  const header = grid[0].map(cleanHeader);
-  const headerKeys = grid[0].map(headerKey);
+  const headerCandidates = [
+    ["sku", "seller sku", "item sku", "partner sku", "merchant sku"],
+    ["upc", "gtin", "product id", "productid", "item id", "itemid", "product identifier", "productidentifier", "external product id", "externalproductid"],
+  ];
+  const headerRowIndex = grid.findIndex((candidate, rowIndex) => {
+    if (rowIndex > 25) return false;
+    const cleaned = candidate.map(cleanHeader);
+    const keys = candidate.map(headerKey);
+    if (keys.length === 1 && /^sep=./i.test(cleaned[0])) return false;
+    const hasHeader = (names: string[]) => cleaned.some((h, i) => {
+      const key = keys[i];
+      if (key.includes("type") || key.includes("kind")) return false;
+      return names.some((n) => {
+        const nKey = headerKey(n);
+        return h === n || h.startsWith(n) || key === nKey || key.startsWith(nKey) || key.endsWith(nKey);
+      });
+    });
+    return headerCandidates.some(hasHeader);
+  });
+  if (headerRowIndex < 0) {
+    errors.push("missing SKU, UPC, or GTIN column");
+    return { rows: [], errors };
+  }
+  const header = grid[headerRowIndex].map(cleanHeader);
+  const headerKeys = grid[headerRowIndex].map(headerKey);
   const idx = (names: string[]) =>
     header.findIndex((h, i) => {
       const key = headerKeys[i];
@@ -233,7 +258,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
       });
     });
   const idxIdentifier = () => {
-    const names = ["upc", "gtin", "product id", "productid", "item id"];
+    const names = ["upc", "gtin", "product id", "productid", "item id", "itemid", "product identifier", "productidentifier", "external product id", "externalproductid"];
     return header.findIndex((h, i) => {
       const key = headerKeys[i];
       if (key.includes("type") || key.includes("kind")) return false;
@@ -269,7 +294,7 @@ function parseDimensionsCsv(text: string): { rows: ParsedDimRow[]; errors: strin
   const clean = (s: string | undefined): string =>
     (s ?? "").replace(/^\ufeff/, "").trim().replace(/[",=]/g, "").replace(/^'+/, "").trim();
   const rows: ParsedDimRow[] = [];
-  for (let r = 1; r < grid.length; r++) {
+  for (let r = headerRowIndex + 1; r < grid.length; r++) {
     const cells = grid[r];
     const sku = iSku >= 0 ? clean(cells[iSku]) : "";
       const upc = iUpc >= 0 ? normalizeId(clean(cells[iUpc])) : "";
